@@ -82,6 +82,7 @@ async function reconcile(
   if (state === 'running' && session.running_at === null) {
     session.running_at = now;
     await client.query('UPDATE capacity_sessions SET running_at=$2 WHERE id=$1', [session.id, now]);
+    await telemetry(client, now, { kind: 'cloud_running', target: 'ec2', sessionId: session.id, instanceId: session.instance_id });
   }
   if ((state === 'stopping' || state === 'stopped') && session.running_at !== null && session.running_ended_at === null) {
     session.running_ended_at = now;
@@ -94,7 +95,7 @@ async function reconcile(
     }
     await client.query('UPDATE capacity_sessions SET stopped_at=$2,fault=$3 WHERE id=$1', [session.id, now, session.fault]);
     await event(client, session.startup_job_id, now, 'cloud_stopped', { instanceId: session.instance_id, sessionId: session.id });
-    if (session.fault) await telemetry(client, now, { kind: session.fault, target: 'ec2', sessionId: session.id });
+    await telemetry(client, now, { kind: 'cloud_stopped', fault: session.fault, target: 'ec2', sessionId: session.id, instanceId: session.instance_id });
     return { action: null };
   }
   if (session.stop_requested_at !== null) return { session, action: state === 'pending' || state === 'running' ? 'stop' : null };
@@ -231,10 +232,15 @@ export async function schedule(state: CloudState, now = Date.now()): Promise<Act
       await event(client, job.id, now, 'assigned', { workerId: slot.id, target: slot.target, waitingForEc2: cold && slot.target === 'ec2' });
       if (cold && slot.target === 'ec2') {
         cold = false;
+        const sessionId = randomUUID();
         await client.query(
           `INSERT INTO capacity_sessions (id,run_id,instance_id,startup_job_id,rate_micros,requested_at) VALUES ($1,$2,$3,$4,$5,$6)`,
-          [randomUUID(), run.id, run.config.instanceId, job.id, rate, now],
+          [sessionId, run.id, run.config.instanceId, job.id, rate, now],
         );
+        await telemetry(client, now, {
+          kind: 'cloud_start_requested', target: 'ec2', policy: run.policy, sessionId,
+          jobId: job.id, instanceId: run.config.instanceId, reservedMicros: result.reservation,
+        });
         action = 'start';
       }
     }

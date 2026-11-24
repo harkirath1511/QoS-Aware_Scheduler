@@ -11,6 +11,7 @@ interface RecordPayload {
   target?: string;
   policy?: string;
   startupMs?: number;
+  deadlineHit?: boolean;
 }
 
 export function telemetryPublisher() {
@@ -48,8 +49,8 @@ export function telemetryPublisher() {
     const latestBootMs = intervalEvents.reverse().find(row => row.payload.startupMs !== undefined)?.payload.startupMs;
     const run = active && await getRunMetrics(active.id);
     const data: MetricDatum[] = [];
-    function point(MetricName: string, Value: number, Unit?: MetricDatum['Unit']) {
-      data.push({ MetricName, Value, Unit, Timestamp: new Date(now) });
+    function point(MetricName: string, Value: number, Unit?: MetricDatum['Unit'], Dimensions?: MetricDatum['Dimensions']) {
+      data.push({ MetricName, Value, Unit, Dimensions, Timestamp: new Date(now) });
     }
     point('QueueDepth', ops.queued, 'Count');
     point('RunningJobs', ops.running, 'Count');
@@ -66,6 +67,20 @@ export function telemetryPublisher() {
       point('Ec2Busy', run.cloud.busyMs / 1000, 'Seconds');
       point('Ec2Idle', run.cloud.idleMs / 1000, 'Seconds');
       point('EstimatedComputeUsd', run.cloud.computeMicros / 1_000_000, 'None');
+    }
+    const outcomeCounts = new Map<string, { policy: string; target: string; attempts: number; hits: number }>();
+    for (const { payload } of intervalEvents) {
+      if (!payload.policy || !payload.target || payload.deadlineHit === undefined) continue;
+      const key = `${payload.policy}/${payload.target}`;
+      const tally = outcomeCounts.get(key) ?? { policy: payload.policy, target: payload.target, attempts: 0, hits: 0 };
+      tally.attempts++;
+      tally.hits += Number(payload.deadlineHit);
+      outcomeCounts.set(key, tally);
+    }
+    for (const tally of outcomeCounts.values()) {
+      const dimensions = [{ Name: 'Policy', Value: tally.policy }, { Name: 'Target', Value: tally.target }];
+      point('AttemptOutcomes', tally.attempts, 'Count', dimensions);
+      point('OnTimeResults', tally.hits, 'Count', dimensions);
     }
     await metrics.send(new PutMetricDataCommand({ Namespace: env.CLOUDWATCH_NAMESPACE, MetricData: data }), {
       abortSignal: AbortSignal.timeout(8000),
