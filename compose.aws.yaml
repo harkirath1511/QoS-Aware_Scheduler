@@ -14,3 +14,9 @@ services:
       - ${AWS_CONTROLLER_ENV_FILE:?Set AWS_CONTROLLER_ENV_FILE}
     environment:
       EC2_IDENTITY_CERT: /run/aws-iid.pem
+  local-1:
+    build: !reset null
+    image: ${WORKER_IMAGE_REF:?Set WORKER_IMAGE_REF to the worker image by digest}
+  local-2:
+    build: !reset null
+    image: ${WORKER_IMAGE_REF:?Set WORKER_IMAGE_REF to the worker image by digest}
