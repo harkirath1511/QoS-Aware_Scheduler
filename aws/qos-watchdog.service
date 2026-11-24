@@ -1,0 +1,6 @@
+[Unit]
+Description=Stop the lab EC2 worker after controller contact expires
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/qos-worker-watchdog

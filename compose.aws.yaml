@@ -1,0 +1,16 @@
+services:
+  web:
+    env_file:
+      - ${AWS_WEB_ENV_FILE:?Set AWS_WEB_ENV_FILE}
+    environment:
+      EC2_IDENTITY_CERT: /run/aws-iid.pem
+    volumes:
+      - type: bind
+        source: ${AWS_IID_CERT_FILE:?Set AWS_IID_CERT_FILE}
+        target: /run/aws-iid.pem
+        read_only: true
+  scheduler:
+    env_file:
+      - ${AWS_CONTROLLER_ENV_FILE:?Set AWS_CONTROLLER_ENV_FILE}
+    environment:
+      EC2_IDENTITY_CERT: /run/aws-iid.pem

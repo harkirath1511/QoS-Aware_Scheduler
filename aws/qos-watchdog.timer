@@ -1,0 +1,10 @@
+[Unit]
+Description=Check EC2 worker controller contact
+
+[Timer]
+OnBootSec=150s
+OnUnitActiveSec=25s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
