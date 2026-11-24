@@ -4,20 +4,23 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { policies, sha256, type JobInput, type Policy, type Priority } from '../src/domain';
-import type { Job, Run } from '../src/db';
-import type { getRunMetrics } from '../src/metrics';
+import type { Attempt, Job, Run } from '../src/db';
+import type { getRunMetrics, operatorSnapshot } from '../src/metrics';
 
 type Metrics = Awaited<ReturnType<typeof getRunMetrics>>;
+type Operations = Awaited<ReturnType<typeof operatorSnapshot>>;
 type Workload = 'normal' | 'burst';
 const settings = z.object({
   EVALUATION_API: z.url().default('http://localhost:3000'),
   EVALUATION_TOKEN: z.string().min(24),
   EVALUATION_REPEAT: z.coerce.number().int().min(1).max(20).default(3),
-  EVALUATION_LONG_S: z.coerce.number().positive().max(150).default(30),
-  EVALUATION_SHORT_S: z.coerce.number().positive().max(150).default(8),
+  EVALUATION_LONG_S: z.coerce.number().min(1).max(150).default(30),
+  EVALUATION_SHORT_S: z.coerce.number().min(1).max(150).default(8),
+  EVALUATION_NORMAL_INTERVAL_S: z.coerce.number().positive().max(600).optional(),
   EVALUATION_STARTUP_S: z.coerce.number().positive().max(90).default(45),
   EVALUATION_JOB_BUDGET: z.string().default('0.030'),
   EVALUATION_MODE: z.enum(['full', 'smoke']).default('full'),
+  EVALUATION_REQUIRE_EC2: z.enum(['true', 'false']).default('false'),
 }).parse(process.env);
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -72,8 +75,9 @@ function manifest(workload: Workload): Entry[] {
   }
   const budget = settings.EVALUATION_JOB_BUDGET;
   if (workload === 'normal') {
+    const interval = smoke ? 0.3 : settings.EVALUATION_NORMAL_INTERVAL_S ?? Math.max(45, long + 5);
     return Array.from({ length: smoke ? 3 : 12 }, (_, index) =>
-      entry(`routine-${index + 1}`, index * (smoke ? 0.3 : Math.max(45, long + 5)), long + 45, 'normal', long, budget, true));
+      entry(`routine-${index + 1}`, index * interval, long + 45, 'normal', long, budget, true));
   }
   return [
     entry('already-running-1', 0, long * 5, 'normal', long, '0', true),
@@ -84,6 +88,19 @@ function manifest(workload: Workload): Entry[] {
     entry('zero-budget', smoke ? 0.4 : 8, startup + Math.max(11, short), 'high', short, '0', false),
     entry('already-at-risk', smoke ? 0.4 : 8, smoke ? 1.5 : 3, 'high', long, budget, true),
   ];
+}
+
+async function jobEvidence(jobId: string, wallClockDeadline: number) {
+  const job = await api<Job & { attempts: Attempt[] }>(`/api/jobs/${jobId}`);
+  const winningAttempt = job.attempts.find(attempt => attempt.id === job.winning_attempt_id) ?? null;
+  return {
+    status: job.status,
+    deadlineAt: wallClockDeadline,
+    completedAt: job.terminal_at,
+    onTime: job.status === 'SUCCEEDED' && job.terminal_at! <= wallClockDeadline,
+    placement: job.decision,
+    winningAttempt,
+  };
 }
 
 async function runTrace(workload: Workload, policy: Policy, repeat: number, entries: Entry[]) {
@@ -106,7 +123,7 @@ async function runTrace(workload: Workload, policy: Policy, repeat: number, entr
     const queued = await api<Job>(`/api/jobs/${job.id}/input`, {
       method: 'PUT', headers: { 'Content-Type': 'text/csv' }, body: new Uint8Array(entry.input.bytes),
     });
-    return { fixture: entry.id, jobId: job.id, plannedAt: arrival, admittedAt: queued.queued_at };
+    return { fixture: entry.id, jobId: job.id, plannedAt: arrival, admittedAt: queued.queued_at, deadlineAt: Date.parse(spec.deadline) };
   }));
   const until = Date.now() + 25 * 60_000;
   while (Date.now() < until) {
@@ -114,18 +131,48 @@ async function runTrace(workload: Workload, policy: Policy, repeat: number, entr
     if (!metrics.counts.active && !metrics.cloud.active) {
       await post('/api/runs/finish', { id: run.id });
       const complete = await api<Metrics>(`/api/runs/${run.id}/metrics`);
+      const jobs = await Promise.all(submitted.map(async entry => ({
+        ...entry, ...await jobEvidence(entry.jobId, entry.deadlineAt),
+      })));
       console.log(`${label}: ${complete.deadlines.hits}/${complete.deadlines.denominator} on time, ${complete.cloud.successes} EC2 results`);
-      return { workload, policy, repeat, submitted, metrics: complete };
+      return { workload, policy, repeat, submitted: jobs, metrics: complete };
     }
     await sleep(1000);
   }
   throw new Error(`Evaluation ${run.id} did not reach a terminal state.`);
 }
 
+type Replay = Awaited<ReturnType<typeof runTrace>>;
+
+function cloudRescues(result: Replay) {
+  if (result.workload !== 'burst' || result.policy !== 'qos') return [];
+  return result.submitted.flatMap(job => {
+    const attempt = job.winningAttempt;
+    const placement = job.placement;
+    if (!job.onTime || !attempt || attempt.target !== 'ec2' || !attempt.instance_id || !attempt.image_digest ||
+        !attempt.output_sha256 || placement?.reason !== 'cloud_rescues_deadline' ||
+        placement.localFinish === null || placement.localFinish <= job.deadlineAt ||
+        placement.cloudFinish === null || placement.cloudFinish > job.deadlineAt) return [];
+    const session = result.metrics.cloud.sessions.find(item => item.instance_id === attempt.instance_id &&
+      item.ready_at !== null && item.ready_at <= attempt.started_at &&
+      item.stopped_at !== null && item.stopped_at >= job.completedAt!);
+    return session ? [{
+      runId: result.metrics.run.id, jobId: job.jobId, attemptId: attempt.id, sessionId: session.id,
+      instanceId: attempt.instance_id, imageDigest: attempt.image_digest, checksum: attempt.output_sha256,
+      deadlineAt: job.deadlineAt, publishedAt: job.completedAt, stoppedAt: session.stopped_at,
+      localForecastAt: placement.localFinish, cloudForecastAt: placement.cloudFinish,
+    }] : [];
+  });
+}
+
 async function main() {
+  if (settings.EVALUATION_REQUIRE_EC2 === 'true') {
+    const ops = await api<Operations>('/api/runs/operations');
+    if (ops.cloudState !== 'stopped') throw new Error(`Live replay requires configured, stopped EC2 capacity. Observed: ${ops.cloudState}.`);
+  }
   const folder = join('evaluation-output', new Date().toISOString().replaceAll(':', '-'));
   await mkdir(folder, { recursive: true });
-  const results: Awaited<ReturnType<typeof runTrace>>[] = [];
+  const results: Replay[] = [];
   for (const workload of ['normal', 'burst'] as const) {
     const entries = manifest(workload);
     const repeats = settings.EVALUATION_MODE === 'smoke' ? 1 : settings.EVALUATION_REPEAT;
@@ -148,7 +195,12 @@ async function main() {
     }),
   }));
   await writeFile(join(folder, 'comparison.json'), JSON.stringify(comparison, null, 2));
+  const rescues = results.flatMap(cloudRescues);
+  await writeFile(join(folder, 'ec2-rescues.json'), JSON.stringify(rescues, null, 2));
   console.log(`Saved run evidence in ${folder}.`);
+  if (settings.EVALUATION_REQUIRE_EC2 === 'true' && !rescues.length) {
+    throw new Error('No on-time EC2 rescue with observed shutdown was captured. Inspect the run evidence and calibration.');
+  }
 }
 
 main().catch(error => { console.error((error as Error).message); process.exitCode = 1; });

@@ -91,6 +91,8 @@ Set `EVALUATION_TOKEN` to the operator token and `EVALUATION_API` to the dashboa
 
 Before collecting full results, benchmark the generated workload on both targets. Set the same frozen startup, throughput, runtime ratio and fixed overhead values for all policies. Set `EVALUATION_LONG_S`, `EVALUATION_SHORT_S` and `EVALUATION_STARTUP_S` to the observed planning estimates. The CSV size and lag range bound the work. If a fast lab host drains the entire burst before EC2 can start, lower `LOCAL_WORKER_CPUS` for a controlled experiment, recalibrate, and record the quota as part of the run setup. Verify that the long fixtures finish inside 180 seconds. Report both configurations if comparing that experiment to an unrestricted lab.
 
+Set `EVALUATION_NORMAL_INTERVAL_S` to replay normal demand at a measured arrival interval. Keep the interval comfortably above the normal fixture's service time. In AWS mode, set `EVALUATION_REQUIRE_EC2=true` to check that EC2 is configured and stopped before the replay and require at least one recorded on-time rescue with observed shutdown. The CLI writes matching attempt IDs and checksums to `ec2-rescues.json` for comparison with the CloudWatch stream.
+
 The output reports mean and p95 queue wait, queue wait by priority, retry wait, deadline hits including unclaimed jobs, completion time, makespan, EC2 usage and estimated compute cost. A cloud rescue needs a corresponding verified EC2 claim and a result published by the deadline. Compare additional on-time jobs and their incremental cost against each baseline.
 
 See [AWS setup](aws/README.md) for the live-burst checklist.
