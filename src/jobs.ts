@@ -32,6 +32,20 @@ export async function startRun(label: string, policy: Policy, manifest: object) 
   });
 }
 
+export async function endRun(id: string) {
+  return transaction(async client => {
+    const { rows: [run] } = await client.query<Run>('SELECT * FROM runs WHERE id=$1', [id]);
+    if (!run) throw new Fault(404, 'Run not found.');
+    if (run.ended_at !== null) return;
+    const { rows: [busy] } = await client.query(
+      `SELECT EXISTS(SELECT 1 FROM jobs WHERE run_id=$1 AND status NOT IN ('SUCCEEDED','FAILED'))
+       OR EXISTS(SELECT 1 FROM capacity_sessions WHERE run_id=$1 AND stopped_at IS NULL) AS busy`, [id],
+    );
+    if (busy.busy) throw new Fault(409, 'Wait until all jobs finish and EC2 stops.');
+    await client.query('UPDATE runs SET ended_at=$2 WHERE id=$1', [id, Date.now()]);
+  });
+}
+
 export async function submit(owner: string, key: string, spec: JobInput) {
   return transaction(async client => {
     const hash = sha256(JSON.stringify(spec));

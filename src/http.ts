@@ -6,8 +6,8 @@ import { boundedBody, downloadUrl, inputKey, maxResultBytes, outputKey, putArtif
 import { registration, verifyRegistration } from './cloud';
 import { db, event, transaction } from './db';
 import { checksum, Fault, jobInput, limits, policies, sha256 } from './domain';
-import { claim, currentAttempt, finishAttempt, heartbeat, admit, ownedJob, register, startRun, submit } from './jobs';
-import { getRunMetrics, runSummaries } from './metrics';
+import { claim, currentAttempt, endRun, finishAttempt, heartbeat, admit, ownedJob, register, startRun, submit } from './jobs';
+import { getRunMetrics, operatorSnapshot, runSummaries } from './metrics';
 import { samplesFromCsv } from './vibration';
 
 const uuid = z.uuid();
@@ -50,6 +50,7 @@ export async function handle(request: Request, parts: string[]) {
     if (parts[0] === 'jobs') return await jobRequest(request, parts.slice(1), account.id);
     if (parts[0] === 'runs') {
       if (parts.length === 1 && request.method === 'GET') return json(await runSummaries());
+      if (parts.length === 2 && parts[1] === 'operations' && request.method === 'GET') return json(await operatorSnapshot());
       if (parts.length === 1 && request.method === 'POST') {
         const run = await readJson(request, z.object({
           label: z.string().min(1).max(100), policy: z.enum(policies), manifest: z.record(z.string(), z.unknown()),
@@ -58,6 +59,11 @@ export async function handle(request: Request, parts: string[]) {
       }
       if (parts.length === 3 && parts[2] === 'metrics' && request.method === 'GET') {
         return json(await getRunMetrics(uuid.parse(parts[1])));
+      }
+      if (parts.length === 2 && parts[1] === 'finish' && request.method === 'POST') {
+        const { id } = await readJson(request, z.object({ id: uuid }));
+        await endRun(id);
+        return empty();
       }
     }
     throw new Fault(404, 'Endpoint not found.');
