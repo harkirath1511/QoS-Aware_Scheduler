@@ -1,0 +1,9 @@
+.env
+.env.local
+.deps/
+.data/
+.next/
+node_modules/
+*.tsbuildinfo
+next-env.d.ts
+evaluation-output/

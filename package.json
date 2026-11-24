@@ -1,0 +1,37 @@
+{
+  "name": "cloud-qos-scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:init": "tsx scripts/migrate.ts",
+    "scheduler": "tsx scripts/scheduler.ts",
+    "worker": "tsx scripts/worker.ts",
+    "evaluate": "tsx scripts/evaluate.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3",
+    "@aws-sdk/client-cloudwatch-logs": "^3",
+    "@aws-sdk/client-ec2": "^3",
+    "@aws-sdk/client-s3": "^3",
+    "@aws-sdk/s3-request-presigner": "^3",
+    "next": "^16.4",
+    "pg": "^8",
+    "react": "^19",
+    "react-dom": "^19",
+    "tsx": "^4",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/pg": "^8",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5.9"
+  }
+}

@@ -1,0 +1,7 @@
+.git
+.next
+.deps
+.data
+.env*
+node_modules
+evaluation-output
