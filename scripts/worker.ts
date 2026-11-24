@@ -66,7 +66,7 @@ function compute(input: Buffer, spec: JobInput, signal: AbortSignal): Promise<Bu
   return new Promise((resolve, reject) => {
     // The analysis process receives only the CSV and fixed analysis parameters.
     const analysis = spawn(process.execPath, ['--import', 'tsx', 'scripts/compute.ts', JSON.stringify(spec)], {
-      env: {}, stdio: ['pipe', 'pipe', 'pipe'], signal, windowsHide: true, killSignal: 'SIGKILL',
+      env: { NODE_ENV: 'production' }, stdio: 'pipe', signal, windowsHide: true, killSignal: 'SIGKILL',
     });
     const output: Buffer[] = [];
     analysis.stdout.on('data', chunk => output.push(chunk));
@@ -94,7 +94,7 @@ async function run(work: Work) {
         if (response.ok) leaseUntil = (await response.json()).leaseUntil;
         else if (response.status === 409 || response.status === 401) return stop.abort();
       } catch { /* Use the last acknowledged lease expiry. */ }
-      if (Date.now() + limits.heartbeatMs >= leaseUntil) return stop.abort();
+      if (Date.now() >= leaseUntil) return stop.abort();
     }
   };
   const renewal = renew().catch(() => undefined);

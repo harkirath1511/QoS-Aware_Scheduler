@@ -19,10 +19,6 @@ export function telemetryPublisher() {
   const metrics = new CloudWatchClient({ region: env.AWS_REGION, maxAttempts: 2 });
   const logs = new CloudWatchLogsClient({ region: env.AWS_REGION, maxAttempts: 2 });
   let lastMetricsAt = 0;
-  let workerLoss = 0;
-  let startupTimeouts = 0;
-  let lastId = 0;
-  let latestBootMs: number | undefined;
 
   return async () => {
     const now = Date.now();
@@ -38,17 +34,18 @@ export function telemetryPublisher() {
           logEvents: recent.map(row => ({ timestamp: row.created_at, message: JSON.stringify({ eventId: row.id, ...row.payload }) })),
         }), { abortSignal: AbortSignal.timeout(8000) });
       }
-      for (const row of rows) {
-        if (row.id <= lastId) continue;
-        if (row.payload.failure === 'worker_lost') workerLoss++;
-        if (row.payload.kind === 'cloud_startup_timeout') startupTimeouts++;
-        if (row.payload.startupMs !== undefined) latestBootMs = row.payload.startupMs;
-        lastId = row.id;
-      }
+      await db().query('UPDATE telemetry SET sent_at=$1 WHERE id <= $2 AND sent_at IS NULL', [now, rows.at(-1)!.id]);
     }
     if (now - lastMetricsAt < 60_000) return;
     const ops = await operatorSnapshot();
     const { rows: [active] } = await db().query('SELECT id FROM runs WHERE ended_at IS NULL');
+    const { rows: intervalEvents } = await db().query<{ payload: RecordPayload }>(
+      'SELECT payload FROM telemetry WHERE created_at BETWEEN $1 AND $2 ORDER BY id',
+      [lastMetricsAt ? lastMetricsAt + 1 : now - 60_000, now],
+    );
+    const workerLoss = intervalEvents.filter(row => row.payload.failure === 'worker_lost').length;
+    const startupTimeouts = intervalEvents.filter(row => row.payload.kind === 'cloud_startup_timeout').length;
+    const latestBootMs = intervalEvents.reverse().find(row => row.payload.startupMs !== undefined)?.payload.startupMs;
     const run = active && await getRunMetrics(active.id);
     const data: MetricDatum[] = [];
     function point(MetricName: string, Value: number, Unit?: MetricDatum['Unit']) {
@@ -73,10 +70,6 @@ export function telemetryPublisher() {
     await metrics.send(new PutMetricDataCommand({ Namespace: env.CLOUDWATCH_NAMESPACE, MetricData: data }), {
       abortSignal: AbortSignal.timeout(8000),
     });
-    if (lastId) await db().query('UPDATE telemetry SET sent_at=$1 WHERE id <= $2 AND sent_at IS NULL', [now, lastId]);
     lastMetricsAt = now;
-    workerLoss = 0;
-    startupTimeouts = 0;
-    latestBootMs = undefined;
   };
 }

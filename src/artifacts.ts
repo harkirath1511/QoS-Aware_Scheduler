@@ -14,7 +14,9 @@ let s3Client: S3Client | undefined;
 function settings() {
   const env = config();
   const Bucket = env.AWS_S3_BUCKET;
-  return Bucket ? { s3: s3Client ??= new S3Client({ region: env.AWS_REGION }), Bucket } : null;
+  return Bucket ? {
+    s3: s3Client ??= new S3Client({ region: env.AWS_REGION, requestChecksumCalculation: 'WHEN_REQUIRED' }), Bucket,
+  } : null;
 }
 
 export async function readArtifact(key: string, limit: number) {
