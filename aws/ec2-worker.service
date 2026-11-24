@@ -1,0 +1,17 @@
+[Unit]
+Description=UCS531 EC2 batch worker
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/qos-worker/host.env
+ExecStartPre=/usr/local/sbin/qos-prepare-worker
+ExecStart=/usr/bin/docker run --rm --name qos-worker --init --pull=never --read-only --tmpfs /tmp:size=64m,mode=1777 --cap-drop=ALL --security-opt=no-new-privileges --cpus=1 --memory=512m --env-file /etc/qos-worker/worker.env --volume /run/qos-worker/identity:/run/qos-worker/identity:ro --volume /run/qos-worker/contact:/run/qos-worker/contact --log-driver=awslogs --log-opt awslogs-region=${AWS_REGION} --log-opt awslogs-group=${LOG_GROUP} --log-opt awslogs-stream=ec2-1 --log-opt awslogs-create-stream=false ${WORKER_IMAGE}
+ExecStop=/usr/bin/docker stop -t 10 qos-worker
+Restart=on-failure
+RestartSec=4s
+
+[Install]
+WantedBy=multi-user.target

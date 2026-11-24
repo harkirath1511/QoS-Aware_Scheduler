@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Logs and alarms for the UCS531 hybrid scheduler
+Parameters:
+  Name:
+    Type: String
+    Default: /ucs531/scheduler
+  Namespace:
+    Type: String
+    Default: UCS531/Scheduler
+Resources:
+  SchedulerLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref Name
+      RetentionInDays: 14
+  ControllerLogs:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref SchedulerLogs
+      LogStreamName: controller
+  Ec2WorkerLogs:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref SchedulerLogs
+      LogStreamName: ec2-1
+  WorkerLoss:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: A running attempt lost its worker lease
+      Namespace: !Ref Namespace
+      MetricName: WorkerLoss
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+  StartupTimeout:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: EC2 did not establish a ready worker in time
+      Namespace: !Ref Namespace
+      MetricName: StartupTimeout
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+  StopOverdue:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: EC2 remained running beyond the stop grace period
+      Namespace: !Ref Namespace
+      MetricName: StopOverdue
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
