@@ -316,7 +316,8 @@ function Operations() {
   const { value, error } = usePoll(loadOperations, 5000);
   const [runs, ops] = value ?? [[], undefined];
   const session = ops?.capacity;
-  const cloudState = session?.stop_requested_at ? 'Stopping' : session?.ready_at ? 'Ready' : session ? 'Starting' : 'No active session';
+  const cloudState = session?.stop_requested_at ? 'Stopping' : session?.ready_at && ops?.cloudState === 'running' ? 'Ready' : session ? 'Starting' :
+    humanize(ops?.cloudState ?? 'unknown');
   const workloadRun = runs.find(run => !run.run.ended_at);
   return <>
     <div className="page-head"><div><h1>Operations</h1><p>Live capacity and policy evaluation.</p></div></div>
@@ -333,7 +334,7 @@ function Operations() {
           <strong>{worker.id}</strong><span>{worker.healthy ? 'Healthy' : 'Offline'}</span><span>{date(worker.seen_at)}</span>
         </li>)}</ul>}
       {workloadRun && <p>Current estimated EC2 compute spend <strong>{money(workloadRun.cloud.computeMicros)}</strong></p>}
-      {!!ops?.telemetryPending && <p className="muted">Pending CloudWatch records {ops.telemetryPending}</p>}
+      {ops?.cloudState !== 'disabled' && !!ops?.telemetryPending && <p className="muted">Pending CloudWatch records {ops.telemetryPending}</p>}
     </section>
     <div className="table-wrap" role="region" aria-labelledby="run-caption" tabIndex={0}>
       <table><caption id="run-caption">Policy runs</caption><thead><tr>

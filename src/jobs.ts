@@ -18,15 +18,26 @@ export async function activeRun(client: PoolClient, now: number) {
 export async function startRun(label: string, policy: Policy, manifest: object) {
   return transaction(async client => {
     const now = Date.now();
+    const settings = runConfig();
     const { rows: [busy] } = await client.query(
       `SELECT EXISTS(SELECT 1 FROM jobs WHERE status NOT IN ('SUCCEEDED','FAILED'))
        OR EXISTS(SELECT 1 FROM capacity_sessions WHERE stopped_at IS NULL) AS busy`,
     );
     if (busy.busy) throw new Fault(409, 'Wait until all jobs finish and EC2 stops.');
+    const { rows: [local] } = await client.query(
+      `SELECT count(*) FROM workers WHERE target='local' AND seen_at > $1`, [now - limits.leaseMs],
+    );
+    if (local.count !== 2) throw new Fault(409, 'Wait for both local workers to become healthy.');
+    if (settings.instanceId) {
+      const { rowCount } = await client.query(
+        `SELECT singleton FROM controller_state WHERE cloud_state='stopped' AND observed_at > $1`, [now - limits.leaseMs],
+      );
+      if (!rowCount) throw new Fault(409, 'Wait for the controller to confirm EC2 is stopped.');
+    }
     await client.query('UPDATE runs SET ended_at=$1 WHERE ended_at IS NULL', [now]);
     const { rows } = await client.query<Run>(
       'INSERT INTO runs (id,label,policy,config,manifest,created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
-      [randomUUID(), label, policy, runConfig(), manifest, now],
+      [randomUUID(), label, policy, settings, manifest, now],
     );
     return rows[0];
   });

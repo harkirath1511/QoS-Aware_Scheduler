@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { loadEnvFile } from 'node:process';
 import { existsSync } from 'node:fs';
 import { transaction, db } from '../src/db';
@@ -6,8 +6,11 @@ import { transaction, db } from '../src/db';
 if (existsSync('.env')) loadEnvFile('.env');
 
 async function main() {
-  const schema = await readFile('db/001_initial.sql', 'utf8');
-  await transaction(client => client.query(schema));
+  const files = (await readdir('db')).filter(file => /^\d+_.+\.sql$/.test(file)).sort();
+  for (const file of files) {
+    const schema = await readFile(`db/${file}`, 'utf8');
+    await transaction(client => client.query(schema));
+  }
   console.log('Database schema ready.');
 }
 

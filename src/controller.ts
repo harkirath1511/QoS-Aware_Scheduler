@@ -139,6 +139,10 @@ function finite(value: number) { return Number.isFinite(value) ? value : null; }
 
 export async function schedule(state: CloudState, now = Date.now()): Promise<Action> {
   return transaction(async client => {
+    await client.query(
+      `INSERT INTO controller_state (singleton,cloud_state,observed_at) VALUES (true,$1,$2)
+       ON CONFLICT (singleton) DO UPDATE SET cloud_state=$1, observed_at=$2`, [state, now],
+    );
     const run = await activeRun(client, now);
     const { calibration, rateMicrosPerHour: rate, startupEstimateMs } = run.config;
     const { rows } = await client.query<Worker>('SELECT * FROM workers WHERE seen_at > $1', [now - limits.leaseMs]);

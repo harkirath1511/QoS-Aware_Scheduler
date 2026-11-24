@@ -1,4 +1,4 @@
-import { sessionCost } from './controller';
+import { sessionCost, type CloudState } from './controller';
 import { db, type Attempt, type CapacitySession, type Job, type Run, type Worker } from './db';
 import { Fault, limits } from './domain';
 
@@ -72,16 +72,18 @@ export async function runSummaries() {
 
 export async function operatorSnapshot() {
   const now = Date.now();
-  const [workers, capacity, jobs, telemetry] = await Promise.all([
+  const [workers, capacity, jobs, telemetry, controller] = await Promise.all([
     db().query<Worker>('SELECT * FROM workers ORDER BY id'),
     db().query<CapacitySession>('SELECT * FROM capacity_sessions WHERE stopped_at IS NULL'),
     db().query<{ status: string; count: number; oldest: number | null }>('SELECT status,count(*),min(queued_at) AS oldest FROM jobs GROUP BY status'),
     db().query<{ count: number }>('SELECT count(*) FROM telemetry WHERE sent_at IS NULL'),
+    db().query<{ cloud_state: CloudState; observed_at: number }>('SELECT cloud_state,observed_at FROM controller_state'),
   ]);
   const queued = jobs.rows.find(row => row.status === 'QUEUED');
   return {
     workers: workers.rows.map(worker => ({ ...worker, healthy: worker.seen_at > now - limits.leaseMs })),
     capacity: capacity.rows[0] ?? null, queued: queued?.count ?? 0,
+    cloudState: controller.rows[0]?.observed_at > now - limits.leaseMs ? controller.rows[0].cloud_state : 'unknown',
     running: jobs.rows.find(row => row.status === 'RUNNING')?.count ?? 0,
     oldestWaitMs: queued?.oldest == null ? 0 : Math.max(0, now - queued.oldest),
     telemetryPending: telemetry.rows[0].count,

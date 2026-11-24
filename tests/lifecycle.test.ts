@@ -20,6 +20,7 @@ test('PostgreSQL enforces leases and preserves EC2 assignments through startup a
   await admin.query(`CREATE SCHEMA ${schema}`);
   try {
     await db().query(await readFile('db/001_initial.sql', 'utf8'));
+    await db().query(await readFile('db/002_controller_state.sql', 'utf8'));
     const owner = 'student';
     const coldLocal = await registerSlot('local-1', 'local');
     const secondLocal = await registerSlot('local-2', 'local');
