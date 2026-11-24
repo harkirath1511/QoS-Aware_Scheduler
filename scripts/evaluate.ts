@@ -82,7 +82,7 @@ function manifest(workload: Workload): Entry[] {
       entry(`backlog-${index + 1}`, smoke ? 0.4 : 2, long * 5, index < 6 ? 'high' : 'normal', long, budget, true)),
     entry('deadline-rescue', smoke ? 0.4 : 8, startup + Math.max(10, short), 'high', short, budget, false),
     entry('zero-budget', smoke ? 0.4 : 8, startup + Math.max(11, short), 'high', short, '0', false),
-    entry('already-at-risk', smoke ? 0.4 : 8, 0.5, 'high', long, budget, true),
+    entry('already-at-risk', smoke ? 0.4 : 8, smoke ? 1.5 : 3, 'high', long, budget, true),
   ];
 }
 
@@ -125,7 +125,7 @@ async function runTrace(workload: Workload, policy: Policy, repeat: number, entr
 async function main() {
   const folder = join('evaluation-output', new Date().toISOString().replaceAll(':', '-'));
   await mkdir(folder, { recursive: true });
-  const results = [];
+  const results: Awaited<ReturnType<typeof runTrace>>[] = [];
   for (const workload of ['normal', 'burst'] as const) {
     const entries = manifest(workload);
     const repeats = settings.EVALUATION_MODE === 'smoke' ? 1 : settings.EVALUATION_REPEAT;
