@@ -85,6 +85,8 @@ npm test
 
 Set `TEST_DATABASE_URL` to a PostgreSQL database that permits disposable schemas to run the database lifecycle test. It exercises concurrent claims, a fenced retry, EC2 readiness and idle stop using simulated AWS state. The local Compose stack can run with no AWS account.
 
+Set `SMOKE_URL=http://localhost:3000` and run `npm test` with the local stack running and the generated `.env` present. The HTTP test checks idempotent admission, job ownership, upload recovery, and the published 250 Hz result from a real worker.
+
 Set `EVALUATION_TOKEN` to the operator token and `EVALUATION_API` to the dashboard origin, then run `npm run evaluate`. For a short end-to-end run set `EVALUATION_MODE=smoke`. The full trace uses 12 spaced arrivals and a burst while local slots are occupied. It rotates policy order across three paired repetitions and writes timestamped per-run and comparison JSON files under `evaluation-output/`.
 
 Before collecting full results, benchmark the generated workload on both targets. Set the same frozen startup, throughput, runtime ratio and fixed overhead values for all policies. Set `EVALUATION_LONG_S`, `EVALUATION_SHORT_S` and `EVALUATION_STARTUP_S` to the observed planning estimates. The CSV size and lag range bound the work. If a fast lab host drains the entire burst before EC2 can start, lower `LOCAL_WORKER_CPUS` for a controlled experiment, recalibrate, and record the quota as part of the run setup. Verify that the long fixtures finish inside 180 seconds. Report both configurations if comparing that experiment to an unrestricted lab.
