@@ -62,6 +62,15 @@ test('PostgreSQL enforces leases and preserves EC2 assignments through startup a
     assert.equal((await ownedJob(urgent.id, owner)).status, 'SUCCEEDED');
     const ack = await transaction(client => currentAttempt(client, cloud.id, cloud.generation, cloudClaim.attempt.id, Date.now(), true));
     assert.equal(ack.attempt.outcome, 'succeeded');
+    const reuse = await enqueue(owner, createSpec({
+      expectedSeconds: 1, deadline: new Date(Date.now() + 25_000).toISOString(), budgetUsd: '0.006',
+    }));
+    assert.equal(await schedule('running'), null);
+    const reusedClaim = await claim(cloud.id, cloud.generation);
+    assert.equal(reusedClaim?.job.id, reuse.id);
+    assert.ok(reusedClaim);
+    await transaction(client =>
+      finishAttempt(client, reusedClaim.job, reusedClaim.attempt, Date.now(), { checksum: sha256('second cloud result') }));
     await schedule('running');
     await db().query('UPDATE capacity_sessions SET idle_at=idle_at-$1', [limits.idleMs + 1000]);
     assert.equal(await schedule('running'), 'stop');
@@ -69,7 +78,7 @@ test('PostgreSQL enforces leases and preserves EC2 assignments through startup a
     await schedule('stopping');
     await schedule('stopped');
     const metric = await getRunMetrics(urgent.run_id);
-    assert.equal(metric.cloud.successes, 1);
+    assert.equal(metric.cloud.successes, 2);
     assert.equal(metric.cloud.starts, 1);
     assert.equal(metric.cloud.active, false);
     assert.ok(metric.cloud.computeMicros >= 2000);
