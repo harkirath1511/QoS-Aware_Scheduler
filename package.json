@@ -4,9 +4,10 @@
   "private": true,
   "engines": { "node": ">=22" },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
     "start": "next start",
+    "env:init": "tsx scripts/init-env.ts",
     "db:init": "tsx scripts/migrate.ts",
     "scheduler": "tsx scripts/scheduler.ts",
     "worker": "tsx scripts/worker.ts",
