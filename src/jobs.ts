@@ -142,10 +142,18 @@ async function touch(client: PoolClient, id: string, generation: string, now: nu
   return worker;
 }
 
+async function requireLiveController(client: PoolClient, now: number) {
+  const { rowCount } = await client.query(
+    'SELECT singleton FROM controller_state WHERE observed_at > $1', [now - limits.leaseMs],
+  );
+  if (!rowCount) throw new Fault(503, 'The EC2 controller heartbeat expired.');
+}
+
 export async function claim(id: string, generation: string) {
   return transaction(async client => {
     const now = Date.now();
     const worker = await touch(client, id, generation, now);
+    if (worker.target === 'ec2') await requireLiveController(client, now);
     if (worker.busy_attempt) {
       const { rows: [attempt] } = await client.query<Attempt>('SELECT * FROM attempts WHERE id=$1', [worker.busy_attempt]);
       if (!attempt || attempt.worker_generation !== generation || attempt.lease_until <= now) return null;
@@ -153,10 +161,11 @@ export async function claim(id: string, generation: string) {
       return { job, attempt };
     }
     if (worker.target === 'ec2') {
-      const { rowCount } = await client.query(
-        'SELECT id FROM capacity_sessions WHERE ready_at IS NOT NULL AND stop_requested_at IS NULL AND stopped_at IS NULL',
+      const { rows: [capacity] } = await client.query<{ ready_at: number | null; stop_requested_at: number | null }>(
+        'SELECT ready_at,stop_requested_at FROM capacity_sessions WHERE stopped_at IS NULL',
       );
-      if (!rowCount) return null;
+      if (!capacity || capacity.stop_requested_at !== null) throw new Fault(503, 'The EC2 slot is shutting down.');
+      if (capacity.ready_at === null) return null;
     }
     const { rows: [job] } = await client.query<Job>(
       `SELECT * FROM jobs WHERE assigned_worker=$1 AND status='ASSIGNED'`, [id],
@@ -201,6 +210,7 @@ export async function heartbeat(workerId: string, generation: string, attemptId:
   return transaction(async client => {
     const now = Date.now();
     const { attempt } = await currentAttempt(client, workerId, generation, attemptId, now);
+    if (attempt.target === 'ec2') await requireLiveController(client, now);
     const until = Math.min(now + limits.leaseMs, attempt.started_at + limits.executionMs);
     await touch(client, workerId, generation, now);
     await client.query('UPDATE attempts SET lease_until=$2 WHERE id=$1', [attemptId, until]);

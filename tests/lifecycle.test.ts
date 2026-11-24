@@ -65,6 +65,7 @@ test('PostgreSQL enforces leases and preserves EC2 assignments through startup a
     await schedule('running');
     await db().query('UPDATE capacity_sessions SET idle_at=idle_at-$1', [limits.idleMs + 1000]);
     assert.equal(await schedule('running'), 'stop');
+    await assert.rejects(claim(cloud.id, cloud.generation), { status: 503 });
     await schedule('stopping');
     await schedule('stopped');
     const metric = await getRunMetrics(urgent.run_id);
@@ -72,6 +73,8 @@ test('PostgreSQL enforces leases and preserves EC2 assignments through startup a
     assert.equal(metric.cloud.starts, 1);
     assert.equal(metric.cloud.active, false);
     assert.ok(metric.cloud.computeMicros >= 2000);
+    await db().query('UPDATE controller_state SET observed_at=0');
+    await assert.rejects(claim(cloud.id, cloud.generation), { status: 503 });
 
     await db().query('UPDATE attempts SET lease_until=0 WHERE id=$1', [firstClaim.attempt.id]);
     await schedule('disabled');
