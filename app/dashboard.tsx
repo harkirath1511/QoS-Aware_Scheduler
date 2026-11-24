@@ -329,7 +329,8 @@ function Operations() {
       <div><span>EC2 capacity</span><strong>{ops ? cloudState : '—'}</strong></div>
     </div>
     <section className="panel"><h2>Workers</h2>
-      {!ops?.workers.length ? <p className="muted">No workers have registered.</p> :
+      {!ops ? <p className="muted">{error ? 'Worker status unavailable.' : 'Loading workers…'}</p> :
+        !ops.workers.length ? <p className="muted">No workers have registered.</p> :
         <ul className="workers">{ops.workers.map(worker => <li key={worker.id}>
           <strong>{worker.id}</strong><span>{worker.healthy ? 'Healthy' : 'Offline'}</span><span>{date(worker.seen_at)}</span>
         </li>)}</ul>}
@@ -345,7 +346,7 @@ function Operations() {
           <td>{rate(run.deadlines.hits, run.deadlines.denominator)}</td><td>{rate(run.deadlines.highHits, run.deadlines.highDenominator)}</td>
           <td>{seconds(run.completionMs.median)}</td><td>{seconds(run.makespanMs)}</td><td>{run.cloud.successes}</td>
           <td>{money(run.cloud.computeMicros)}</td></tr>)}
-        {!runs.length && <tr><td colSpan={10} className="empty">No runs recorded.</td></tr>}
+        {!runs.length && <tr><td colSpan={10} className="empty">{value ? 'No runs recorded.' : 'Loading runs…'}</td></tr>}
       </tbody></table>
     </div>
   </>;
