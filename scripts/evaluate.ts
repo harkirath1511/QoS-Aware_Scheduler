@@ -14,6 +14,7 @@ const settings = z.object({
   EVALUATION_API: z.url().default('http://localhost:3000'),
   EVALUATION_TOKEN: z.string().min(24),
   EVALUATION_REPEAT: z.coerce.number().int().min(1).max(20).default(3),
+  EVALUATION_FIRST_TRIAL: z.coerce.number().int().min(1).max(100).default(1),
   EVALUATION_LONG_S: z.coerce.number().min(1).max(150).default(30),
   EVALUATION_SHORT_S: z.coerce.number().min(1).max(150).default(8),
   EVALUATION_NORMAL_INTERVAL_S: z.coerce.number().positive().max(600).optional(),
@@ -176,7 +177,8 @@ async function main() {
   for (const workload of ['normal', 'burst'] as const) {
     const entries = manifest(workload);
     const repeats = settings.EVALUATION_MODE === 'smoke' ? 1 : settings.EVALUATION_REPEAT;
-    for (let repeat = 0; repeat < repeats; repeat++) {
+    const firstRepeat = settings.EVALUATION_FIRST_TRIAL - 1;
+    for (let repeat = firstRepeat; repeat < firstRepeat + repeats; repeat++) {
       for (let turn = 0; turn < policies.length; turn++) {
         const policy = policies[(repeat + turn) % policies.length];
         const result = await runTrace(workload, policy, repeat, entries);
