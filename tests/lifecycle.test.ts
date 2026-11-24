@@ -11,7 +11,7 @@ import { getRunMetrics } from '../src/metrics';
 
 const connection = process.env.TEST_DATABASE_URL;
 
-test('PostgreSQL enforces leases and preserves EC2 assignments through startup and stop', { skip: !connection }, async () => {
+test('PostgreSQL handles worker leases, EC2 reuse, and timeout fallback', { skip: !connection }, async () => {
   const admin = new Pool({ connectionString: connection });
   const schema = `test_${randomUUID().replaceAll('-', '')}`;
   const url = new URL(connection!);
@@ -91,8 +91,32 @@ test('PostgreSQL enforces leases and preserves EC2 assignments through startup a
       currentAttempt(client, coldLocal.id, coldLocal.generation, firstClaim.attempt.id, Date.now(), true)),
     { status: 409 });
     const retry = await claim(coldLocal.id, coldLocal.generation);
-    assert.equal(retry?.attempt.number, 2);
-    assert.equal(retry?.job.id, firstClaim.job.id);
+    assert.ok(retry);
+    assert.equal(retry.attempt.number, 2);
+    assert.equal(retry.job.id, firstClaim.job.id);
+
+    const fallback = await enqueue(owner, createSpec({
+      expectedSeconds: 1, deadline: new Date(Date.now() + 60_000).toISOString(),
+    }));
+    assert.equal(await schedule('stopped'), 'start');
+    assert.equal((await ownedJob(fallback.id, owner)).target, 'ec2');
+    await db().query('UPDATE capacity_sessions SET requested_at=requested_at-$1 WHERE stopped_at IS NULL', [limits.startupMs]);
+    assert.equal(await schedule('pending'), 'stop');
+    let fallbackState = await ownedJob(fallback.id, owner);
+    assert.equal(fallbackState.status, 'QUEUED');
+    assert.equal(fallbackState.failure, 'cloud_startup_timeout');
+    assert.equal(fallbackState.reserved_micros, 0);
+
+    await db().query('UPDATE attempts SET started_at=started_at-$2 WHERE id=$1', [retry.attempt.id, limits.executionMs]);
+    assert.equal(await schedule('stopped'), null);
+    const timedOut = await ownedJob(retry.job.id, owner);
+    assert.equal(timedOut.status, 'FAILED');
+    assert.equal(timedOut.failure, 'timed_out');
+    assert.equal(timedOut.winning_attempt_id, null);
+    fallbackState = await ownedJob(fallback.id, owner);
+    assert.equal(fallbackState.target, 'local');
+    const localFallback = await claim(coldLocal.id, coldLocal.generation);
+    assert.equal(localFallback?.job.id, fallback.id);
   } finally {
     await db().end();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
