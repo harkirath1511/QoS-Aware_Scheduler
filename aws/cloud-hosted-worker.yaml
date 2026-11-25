@@ -8,7 +8,7 @@ Parameters:
     Type: String
   DashboardUrl:
     Type: String
-    AllowedPattern: 'https://[a-z0-9]+\.cloudfront\.net'
+    AllowedPattern: 'https://([a-z0-9]+\.cloudfront\.net|[a-z0-9]+\.execute-api\.us-east-1\.amazonaws\.com)'
   WorkerImage:
     Type: String
     AllowedPattern: '[a-z0-9./_-]+@sha256:[a-f0-9]{64}'

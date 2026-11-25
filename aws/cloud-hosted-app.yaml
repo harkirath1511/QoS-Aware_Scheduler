@@ -40,6 +40,10 @@ Parameters:
   Ec2StartSeconds:
     Type: Number
     Default: 40
+  PublicOrigin:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|https://([a-z0-9]+\.cloudfront\.net|[a-z0-9]+\.execute-api\.us-east-1\.amazonaws\.com)'
   AppAmi:
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
@@ -192,6 +196,7 @@ Resources:
           CLOUDWATCH_LOG_GROUP=${LogGroupName}
           CLOUDWATCH_NAMESPACE=UCS531/Scheduler
           COOKIE_SECURE=true
+          PUBLIC_ORIGIN=${PublicOrigin}
           HOSTNAME=0.0.0.0
           ENV
           cat > /usr/local/sbin/qos-hosted-prepare <<'PREPARE'
@@ -276,5 +281,7 @@ Outputs:
     Value: !Ref App
   AppPrivateDnsName:
     Value: !GetAtt App.PrivateDnsName
+  AppPrivateIp:
+    Value: !GetAtt App.PrivateIp
   AppImageParameter:
     Value: !Ref ImageDigestParameter

@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: API Gateway HTTPS endpoint with private connectivity to the UCS531 app origin
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  AppSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  AppPrivateIp:
+    Type: String
+    AllowedPattern: '[0-9.]{7,15}'
+Resources:
+  LinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: API Gateway private connection to the scheduler origin
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 3000, ToPort: 3000, DestinationSecurityGroupId: !Ref AppSecurityGroupId}
+  AppIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 3000
+      ToPort: 3000
+      SourceSecurityGroupId: !Ref LinkSecurityGroup
+  Namespace:
+    Type: AWS::ServiceDiscovery::HttpNamespace
+    Properties:
+      Name: !Ref 'AWS::StackName'
+  OriginService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      NamespaceId: !Ref Namespace
+      Name: scheduler-origin
+      Type: HTTP
+  OriginRegistration:
+    Type: AWS::ServiceDiscovery::Instance
+    Properties:
+      InstanceId: app-host
+      ServiceId: !GetAtt OriginService.Id
+      InstanceAttributes:
+        AWS_INSTANCE_IPV4: !Ref AppPrivateIp
+        AWS_INSTANCE_PORT: '3000'
+  OriginLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Ref 'AWS::StackName'
+      SubnetIds: [!Ref AppSubnetId]
+      SecurityGroupIds: [!Ref LinkSecurityGroup]
+  Gateway:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Ref 'AWS::StackName'
+      ProtocolType: HTTP
+      Tags: {Project: UCS531}
+  Proxy:
+    Type: AWS::ApiGatewayV2::Integration
+    DependsOn: [OriginRegistration, AppIngress]
+    Properties:
+      ApiId: !Ref Gateway
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      IntegrationUri: !GetAtt OriginService.Arn
+      ConnectionType: VPC_LINK
+      ConnectionId: !Ref OriginLink
+      PayloadFormatVersion: '1.0'
+      TimeoutInMillis: 29000
+      RequestParameters:
+        'overwrite:path': '$request.path'
+  Route:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Gateway
+      RouteKey: '$default'
+      Target: !Sub 'integrations/${Proxy}'
+  AccessLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}'
+      RetentionInDays: 14
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn: Route
+    Properties:
+      ApiId: !Ref Gateway
+      AutoDeploy: true
+      StageName: '$default'
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 25
+        ThrottlingBurstLimit: 50
+      AccessLogSettings:
+        DestinationArn: !GetAtt AccessLog.Arn
+        Format: '{"requestId":"$context.requestId","status":"$context.status","method":"$context.httpMethod","responseLength":"$context.responseLength","integrationStatus":"$context.integrationStatus"}'
+Outputs:
+  DashboardUrl:
+    Value: !GetAtt Gateway.ApiEndpoint
+  ApiId:
+    Value: !Ref Gateway
+  VpcLinkId:
+    Value: !Ref OriginLink

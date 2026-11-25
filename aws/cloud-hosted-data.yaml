@@ -15,8 +15,13 @@ Parameters:
   PostgresVersion:
     Type: String
     Default: '17.11'
+  EnableCloudFrontAccess:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
 Conditions:
   HasOriginGroup: !Not [!Equals [!Ref CloudFrontOriginGroup, '']]
+  UseCloudFront: !Equals [!Ref EnableCloudFrontAccess, 'true']
 Resources:
   Vpc:
     Type: AWS::EC2::VPC
@@ -100,6 +105,7 @@ Resources:
         - {IpProtocol: tcp, FromPort: 443, ToPort: 443, DestinationPrefixListId: !Ref S3PrefixList}
   CloudFrontIngress:
     Type: AWS::EC2::SecurityGroupIngress
+    Condition: UseCloudFront
     Properties:
       GroupId: !Ref AppSecurityGroup
       IpProtocol: tcp

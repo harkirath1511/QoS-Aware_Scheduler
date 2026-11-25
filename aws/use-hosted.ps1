@@ -2,7 +2,8 @@ param(
   [Parameter(Mandatory)][ValidateSet('Operator', 'Student', 'Workers')][string]$Mode,
   [string]$Aws = 'aws',
   [string]$Profile = 'ucs531-qos',
-  [string]$Stack = 'ucs531-qos'
+  [string]$Stack = 'ucs531-qos',
+  [ValidateSet('Gateway', 'Edge')][string]$Entrypoint = 'Gateway'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,11 +35,12 @@ try {
     return
   }
 
-  $url = Read-Output "$Stack-hosted-edge" DashboardUrl
+  $url = Read-Output "$Stack-hosted-$($Entrypoint.ToLowerInvariant())" DashboardUrl
   $image = Read-Output "$Stack-resources" ImageRepository
   $digest = (Invoke-Aws cloudformation describe-stacks --stack-name "$Stack-hosted-app" `
     --query "Stacks[0].Parameters[?ParameterKey=='WorkerImageDigest'].ParameterValue | [0]" --output text).Trim()
-  if ($url -notmatch '^https://[a-z0-9]+\.cloudfront\.net$' -or $digest -notmatch '^sha256:[a-f0-9]{64}$') {
+  if ($url -notmatch '^https://([a-z0-9]+\.cloudfront\.net|[a-z0-9]+\.execute-api\.us-east-1\.amazonaws\.com)$' -or
+      $digest -notmatch '^sha256:[a-f0-9]{64}$') {
     throw 'The hosted URL or worker image is missing.'
   }
   $registry = ($image -split '/', 2)[0]

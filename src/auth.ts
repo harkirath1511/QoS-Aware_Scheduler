@@ -54,10 +54,14 @@ export function sameOrigin(request: Request) {
   const supported = request.headers.get('sec-fetch-site');
   const origin = request.headers.get('origin');
   const host = request.headers.get('host');
-  if (supported === 'cross-site' || (origin && origin !== 'null' && new URL(origin).host !== host)) {
-    throw new Fault(403, 'Cross-origin request denied.');
+  if (supported === 'cross-site' || origin === 'null') throw new Fault(403, 'Cross-origin request denied.');
+  if (origin) {
+    const expected = process.env.PUBLIC_ORIGIN;
+    // Hosted reverse proxies may rewrite Host. Trust only the configured public origin.
+    if (expected ? origin !== expected : new URL(origin).host !== host) {
+      throw new Fault(403, 'Cross-origin request denied.');
+    }
   }
-  if (origin === 'null') throw new Fault(403, 'Cross-origin request denied.');
 }
 
 export function requireAccount(request: Request, cookie?: string, operator = false) {
