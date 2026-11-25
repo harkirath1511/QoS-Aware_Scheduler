@@ -98,3 +98,4 @@ For a shorter live comparison, use `EVALUATION_MODE=hybrid`. Each policy receive
 The output reports mean and p95 queue wait, queue wait by priority, retry wait, deadline hits including unclaimed jobs, completion time, makespan, EC2 usage and estimated compute cost. A cloud rescue needs a corresponding verified EC2 claim and a result published by the deadline. Compare additional on-time jobs and their incremental cost against each baseline.
 
 See [AWS setup](aws/README.md) for the live-burst checklist.
+See the [evaluation report](docs/evaluation.md) for measured local-only and live hybrid results.
