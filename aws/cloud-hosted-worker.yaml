@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Bind the existing burst worker to the hosted HTTPS API and its dedicated secret
+Parameters:
+  WorkerRoleName:
+    Type: String
+    AllowedPattern: '[a-zA-Z0-9+=,.@_-]+'
+  WorkerTokenArn:
+    Type: String
+  DashboardUrl:
+    Type: String
+    AllowedPattern: 'https://[a-z0-9]+\.cloudfront\.net'
+  WorkerImage:
+    Type: String
+    AllowedPattern: '[a-z0-9./_-]+@sha256:[a-f0-9]{64}'
+Resources:
+  HostedWorkerSecret:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ReadHostedWorkerToken
+      Roles: [!Ref WorkerRoleName]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !Ref WorkerTokenArn
+  BindHostedApi:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentFormat: YAML
+      DocumentType: Command
+      UpdateMethod: NewVersion
+      Content:
+        schemaVersion: '2.2'
+        description: Install the hosted worker environment using its scoped Secrets Manager grant
+        mainSteps:
+          - action: aws:runShellScript
+            name: configureWorker
+            inputs:
+              timeoutSeconds: '180'
+              runCommand:
+                - !Sub |
+                    set -eu
+                    umask 077
+                    install -d -m 0700 /etc/qos-worker
+                    install -d -m 0755 /etc/systemd/system/ec2-worker.service.d
+                    cat > /etc/qos-worker/hosted.env <<'ENV'
+                    WORKER_SECRET_ARN=${WorkerTokenArn}
+                    ENV
+                    cat > /etc/qos-worker/worker-settings.env <<'ENV'
+                    WORKER_ID=ec2-1
+                    WORKER_API_URL=${DashboardUrl}
+                    WORKER_IMAGE_DIGEST=DIGEST_PLACEHOLDER
+                    WORKER_IDENTITY_DOCUMENT=/run/qos-worker/identity/document
+                    WORKER_IDENTITY_SIGNATURE=/run/qos-worker/identity/signature
+                    WORKER_CONTACT_FILE=/run/qos-worker/contact/last
+                    ENV
+                    image='${WorkerImage}'
+                    digest=$(printf '%s' "$image" | cut -d@ -f2)
+                    sed -i "s/DIGEST_PLACEHOLDER/$digest/" /etc/qos-worker/worker-settings.env
+                    if ! docker image inspect "$image" >/dev/null 2>&1; then
+                      registry=$(printf '%s' "$image" | cut -d/ -f1)
+                      aws ecr get-login-password --region '${AWS::Region}' | docker login --username AWS --password-stdin "$registry" >/dev/null
+                      docker pull "$image"
+                      docker logout "$registry" >/dev/null
+                    fi
+                    sed -i "s|^WORKER_IMAGE=.*|WORKER_IMAGE=$image|" /etc/qos-worker/host.env
+                    cat > /usr/local/sbin/qos-refresh-worker-token <<'REFRESH'
+                    #!/bin/bash
+                    set -euo pipefail
+                    umask 077
+                    . /etc/qos-worker/hosted.env
+                    . /etc/qos-worker/host.env
+                    token=$(aws secretsmanager get-secret-value --region "$AWS_REGION" --secret-id "$WORKER_SECRET_ARN" --query SecretString --output text)
+                    [[ "$token" =~ ^[a-zA-Z0-9]{48}$ ]]
+                    next=$(mktemp /etc/qos-worker/worker-env.XXXXXX)
+                    trap 'rm -f "$next"' EXIT
+                    cat /etc/qos-worker/worker-settings.env > "$next"
+                    printf 'WORKER_TOKEN=%s\n' "$token" >> "$next"
+                    mv -f "$next" /etc/qos-worker/worker.env
+                    REFRESH
+                    chmod 0700 /usr/local/sbin/qos-refresh-worker-token
+                    cat > /etc/systemd/system/ec2-worker.service.d/hosted.conf <<'UNIT'
+                    [Service]
+                    ExecStartPre=
+                    ExecStartPre=/usr/local/sbin/qos-refresh-worker-token
+                    ExecStartPre=/usr/local/sbin/qos-prepare-worker
+                    UNIT
+                    systemctl daemon-reload
+                    systemctl enable ec2-worker.service qos-watchdog.timer
+                    systemctl restart ec2-worker.service
+                    systemctl is-active ec2-worker.service
+Outputs:
+  BindDocument:
+    Value: !Ref BindHostedApi

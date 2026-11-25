@@ -1,0 +1,26 @@
+name: qos-hosted-workers
+
+x-worker: &worker
+  image: ${WORKER_IMAGE_REF:?Set WORKER_IMAGE_REF to the digest-qualified ECR worker image}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs: [/tmp:size=64m,mode=1777]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  cpus: ${LOCAL_WORKER_CPUS:-1.0}
+  mem_limit: 512m
+
+services:
+  local-1:
+    <<: *worker
+    environment:
+      WORKER_ID: local-1
+      WORKER_API_URL: ${WORKER_API_URL:?Set the hosted HTTPS URL}
+      WORKER_TOKEN: ${WORKER_TOKEN_LOCAL_1:?Set the local-1 token}
+  local-2:
+    <<: *worker
+    environment:
+      WORKER_ID: local-2
+      WORKER_API_URL: ${WORKER_API_URL:?Set the hosted HTTPS URL}
+      WORKER_TOKEN: ${WORKER_TOKEN_LOCAL_2:?Set the local-2 token}
