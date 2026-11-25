@@ -20,7 +20,7 @@ const settings = z.object({
   EVALUATION_NORMAL_INTERVAL_S: z.coerce.number().positive().max(600).optional(),
   EVALUATION_STARTUP_S: z.coerce.number().positive().max(90).default(45),
   EVALUATION_JOB_BUDGET: z.string().default('0.030'),
-  EVALUATION_MODE: z.enum(['full', 'smoke']).default('full'),
+  EVALUATION_MODE: z.enum(['full', 'smoke', 'hybrid']).default('full'),
   EVALUATION_REQUIRE_EC2: z.enum(['true', 'false']).default('false'),
 }).parse(process.env);
 
@@ -63,22 +63,36 @@ interface Entry {
 
 function manifest(workload: Workload): Entry[] {
   const smoke = settings.EVALUATION_MODE === 'smoke';
+  const hybrid = settings.EVALUATION_MODE === 'hybrid';
   const long = smoke ? 1 : settings.EVALUATION_LONG_S;
   const short = smoke ? 1 : settings.EVALUATION_SHORT_S;
   const startup = smoke ? 1 : settings.EVALUATION_STARTUP_S;
   const heavy = fixture(smoke ? 400 : 245_000, 531);
-  const lighter = fixture(smoke ? 200 : 245_000, 532);
+  const lighter = fixture(smoke || hybrid ? 200 : 245_000, 532);
   function entry(id: string, atSeconds: number, deadlineSeconds: number, priority: Priority, expectedSeconds: number, budgetUsd: string, bulk: boolean): Entry {
     return {
       id, atSeconds, deadlineSeconds, priority, expectedSeconds, budgetUsd,
-      maxLag: smoke ? 12 : bulk ? 2048 : 512, input: bulk ? heavy : lighter,
+      maxLag: smoke || (hybrid && !bulk) ? 12 : bulk ? 2048 : 512, input: bulk ? heavy : lighter,
     };
   }
   const budget = settings.EVALUATION_JOB_BUDGET;
   if (workload === 'normal') {
-    const interval = smoke ? 0.3 : settings.EVALUATION_NORMAL_INTERVAL_S ?? Math.max(45, long + 5);
-    return Array.from({ length: smoke ? 3 : 12 }, (_, index) =>
-      entry(`routine-${index + 1}`, index * interval, long + 45, 'normal', long, budget, true));
+    const service = hybrid ? short : long;
+    const interval = smoke ? 0.3 : settings.EVALUATION_NORMAL_INTERVAL_S ?? (hybrid ? Math.max(10, service / 2 + 2) : Math.max(45, long + 5));
+    return Array.from({ length: smoke || hybrid ? 3 : 12 }, (_, index) =>
+      entry(`routine-${index + 1}`, index * interval, service + 45, 'normal', service, budget, !hybrid));
+  }
+  if (hybrid) {
+    const tight = startup + 9;
+    return [
+      entry('preload-1', 0, long * 4, 'normal', long, '0', true),
+      entry('preload-2', 0, long * 4, 'normal', long, '0', true),
+      entry('first-urgent', 10, tight, 'high', short, budget, false),
+      entry('second-urgent', 10, tight + 3, 'high', short, budget, false),
+      entry('local-only', 10, tight + 7, 'high', short, '0', false),
+      entry('routine', 10, long * 4, 'normal', short, budget, false),
+      entry('already-at-risk', 10, 3, 'high', short, budget, false),
+    ];
   }
   return [
     entry('already-running-1', 0, long * 5, 'normal', long, '0', true),

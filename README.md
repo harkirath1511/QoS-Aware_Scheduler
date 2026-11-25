@@ -93,6 +93,8 @@ Before collecting full results, benchmark the generated workload on both targets
 
 Set `EVALUATION_NORMAL_INTERVAL_S` to replay normal demand at a measured arrival interval. Keep the interval comfortably above the normal fixture's service time. In AWS mode, set `EVALUATION_REQUIRE_EC2=true` to check that EC2 is configured and stopped before the replay and require at least one recorded on-time rescue with observed shutdown. The CLI writes matching attempt IDs and checksums to `ec2-rescues.json` for comparison with the CloudWatch stream.
 
+For a shorter live comparison, use `EVALUATION_MODE=hybrid`. Each policy receives three spaced jobs for normal load and seven jobs for the burst, including two long jobs that occupy the local slots before the urgent arrivals. Set `EVALUATION_LONG_S`, `EVALUATION_SHORT_S`, and `EVALUATION_STARTUP_S` from your measured local service and cold-start timings. The mode still runs three repetitions per policy by default.
+
 The output reports mean and p95 queue wait, queue wait by priority, retry wait, deadline hits including unclaimed jobs, completion time, makespan, EC2 usage and estimated compute cost. A cloud rescue needs a corresponding verified EC2 claim and a result published by the deadline. Compare additional on-time jobs and their incremental cost against each baseline.
 
 See [AWS setup](aws/README.md) for the live-burst checklist.
