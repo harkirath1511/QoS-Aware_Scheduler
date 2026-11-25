@@ -2,7 +2,7 @@ import { verify } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { DescribeInstancesCommand, EC2Client, StartInstancesCommand, StopInstancesCommand } from '@aws-sdk/client-ec2';
 import { z } from 'zod';
-import type { CloudState } from './controller';
+import type { CloudObservation } from './controller';
 import { config } from './config';
 import { Fault } from './domain';
 
@@ -27,19 +27,30 @@ export async function verifyRegistration(body: z.infer<typeof registration>) {
   return { instanceId: env.EC2_INSTANCE_ID, imageDigest: body.imageDigest };
 }
 
+export function observeInstance(state?: string, transitionReason?: string): CloudObservation {
+  if (state === 'pending' || state === 'running') return { state };
+  if (state !== 'stopped' && state !== 'stopping') return { state: 'unknown' };
+
+  // EC2 reports its transition time in DescribeInstances even after the instance stops.
+  const stamp = transitionReason?.match(/\((\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) GMT\)$/);
+  if (!stamp) return { state };
+  const iso = `${stamp[1]}T${stamp[2]}.000Z`;
+  const time = Date.parse(iso);
+  return Number.isFinite(time) && new Date(time).toISOString() === iso ? { state, exitedRunningAt: time } : { state };
+}
+
 export function capacityDriver() {
   const env = config();
   const instance = env.EC2_INSTANCE_ID;
   const ec2 = instance ? new EC2Client({ region: env.AWS_REGION, maxAttempts: 2 }) : null;
   return {
-    async observe(): Promise<CloudState> {
-      if (!ec2 || !instance) return 'disabled';
+    async observe(): Promise<CloudObservation> {
+      if (!ec2 || !instance) return { state: 'disabled' };
       const response = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instance] }), {
         abortSignal: AbortSignal.timeout(7000),
       });
-      const state = response.Reservations?.[0]?.Instances?.[0]?.State?.Name;
-      if (state === 'stopped' || state === 'pending' || state === 'running' || state === 'stopping') return state;
-      return 'unknown';
+      const observed = response.Reservations?.[0]?.Instances?.[0];
+      return observeInstance(observed?.State?.Name, observed?.StateTransitionReason);
     },
     async act(action: 'start' | 'stop') {
       if (!ec2 || !instance) return;

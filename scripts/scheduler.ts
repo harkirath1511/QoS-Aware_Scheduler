@@ -28,7 +28,7 @@ async function main() {
       try { return await controller.observe(); }
       catch (error) {
         console.error(JSON.stringify({ kind: 'ec2_observation_failed', name: (error as Error)?.name }));
-        return 'unknown';
+        return { state: 'unknown' };
       }
     }, controller.act), 1000),
     publish && loop('telemetry_failed', publish, 5000),

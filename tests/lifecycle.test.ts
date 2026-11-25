@@ -75,13 +75,21 @@ test('PostgreSQL handles worker leases, EC2 reuse, and timeout fallback', { skip
     await db().query('UPDATE capacity_sessions SET idle_at=idle_at-$1', [limits.idleMs + 1000]);
     assert.equal(await schedule('running'), 'stop');
     await assert.rejects(claim(cloud.id, cloud.generation), { status: 503 });
-    await schedule('stopping');
-    await schedule('stopped');
+    // Simulate a controller that last saw this session three hours before reconciling it.
+    const { rows: [session] } = await db().query(
+      `UPDATE capacity_sessions SET requested_at=requested_at-$1, running_at=running_at-$1,
+       ready_at=ready_at-$1, idle_at=idle_at-$1, stop_requested_at=stop_requested_at-$1 RETURNING stop_requested_at`,
+      [3 * 60 * 60_000],
+    );
+    const stoppedAt = Number(session.stop_requested_at) + 1000;
+    await schedule('stopped', Date.now(), stoppedAt);
+    const { rows: [closed] } = await db().query('SELECT running_ended_at FROM capacity_sessions');
+    assert.equal(Number(closed.running_ended_at), stoppedAt);
     const metric = await getRunMetrics(urgent.run_id);
     assert.equal(metric.cloud.successes, 2);
     assert.equal(metric.cloud.starts, 1);
     assert.equal(metric.cloud.active, false);
-    assert.ok(metric.cloud.computeMicros >= 2000);
+    assert.equal(metric.cloud.computeMicros, 2000);
     await db().query('UPDATE controller_state SET observed_at=0');
     await assert.rejects(claim(cloud.id, cloud.generation), { status: 503 });
 

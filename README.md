@@ -56,7 +56,7 @@ Next.js handles short requests. A separate Node.js scheduler forecasts free time
 | Priority | High, normal, low, then FCFS | Same placement as FCFS. |
 | QoS | Oldest jobs waited at least 120 seconds, then priority and latest viable local start | Local when it can finish on time. Use affordable EC2 when its forecast rescues the deadline. Fall back to best effort. |
 
-The forecast combines committed work, earlier jobs in policy order, calibrated compute and transfer times, and EC2 readiness. Placement records contain both predicted finishes, reasons and the budget comparison. Budgets use integer microdollars. The cloud cost shown in Operations estimates billed EC2 compute from observed running time, with one minimum billing interval per start. Charges for storage, data transfer, monitoring and networking are separate.
+The forecast combines committed work, earlier jobs in policy order, calibrated compute and transfer times, and EC2 readiness. Placement records contain both predicted finishes, reasons and the budget comparison. Budgets use integer microdollars. The cloud cost shown in Operations estimates billed EC2 compute from observed running time, with one minimum billing interval per start. When EC2 reports a valid stop transition time, the estimate uses that timestamp even if the controller was offline. Charges for storage, data transfer, monitoring and networking are separate.
 
 ### HTTP interface
 

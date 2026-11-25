@@ -8,6 +8,7 @@ import { computeCost, placeJob, rankJobs, serviceMs, type Candidate, type Slot }
 export const cloudWorker = 'ec2-1';
 export const localWorkers = ['local-1', 'local-2'];
 export type CloudState = 'disabled' | 'unknown' | 'stopped' | 'pending' | 'running' | 'stopping';
+export type CloudObservation = { state: CloudState; exitedRunningAt?: number };
 type Action = 'start' | 'stop' | null;
 
 function candidate(job: Job): Candidate {
@@ -76,8 +77,9 @@ async function requestStop(client: PoolClient, session: CapacitySession, now: nu
 }
 
 async function reconcile(
-  client: PoolClient, session: CapacitySession | undefined, state: CloudState, worker: Worker | undefined, now: number,
+  client: PoolClient, session: CapacitySession | undefined, observation: CloudObservation, worker: Worker | undefined, now: number,
 ): Promise<{ session?: CapacitySession; action: Action }> {
+  const { state, exitedRunningAt } = observation;
   if (!session) return { action: state === 'running' || state === 'pending' ? 'stop' : null };
   if (state === 'running' && session.running_at === null) {
     session.running_at = now;
@@ -85,13 +87,14 @@ async function reconcile(
     await telemetry(client, now, { kind: 'cloud_running', target: 'ec2', sessionId: session.id, instanceId: session.instance_id });
   }
   if ((state === 'stopping' || state === 'stopped') && session.running_at !== null && session.running_ended_at === null) {
-    session.running_ended_at = now;
-    await client.query('UPDATE capacity_sessions SET running_ended_at=$2 WHERE id=$1', [session.id, now]);
+    session.running_ended_at = exitedRunningAt !== undefined && exitedRunningAt >= session.running_at && exitedRunningAt <= now
+      ? exitedRunningAt : now;
+    await client.query('UPDATE capacity_sessions SET running_ended_at=$2 WHERE id=$1', [session.id, session.running_ended_at]);
   }
   if (state === 'stopped' && (session.stop_requested_at !== null || session.running_at !== null)) {
     if (session.stop_requested_at === null) {
       session.fault = 'cloud_stopped_unexpectedly';
-      if (session.ready_at === null) await chargeStartup(client, session, now);
+      if (session.ready_at === null) await chargeStartup(client, session, session.running_ended_at ?? now);
     }
     await client.query('UPDATE capacity_sessions SET stopped_at=$2,fault=$3 WHERE id=$1', [session.id, now, session.fault]);
     await event(client, session.startup_job_id, now, 'cloud_stopped', { instanceId: session.instance_id, sessionId: session.id });
@@ -138,7 +141,7 @@ function forecastChange(previous: Decision | null, next: Decision) {
 
 function finite(value: number) { return Number.isFinite(value) ? value : null; }
 
-export async function schedule(state: CloudState, now = Date.now()): Promise<Action> {
+export async function schedule(state: CloudState, now = Date.now(), exitedRunningAt?: number): Promise<Action> {
   return transaction(async client => {
     await client.query(
       `INSERT INTO controller_state (singleton,cloud_state,observed_at) VALUES (true,$1,$2)
@@ -149,7 +152,7 @@ export async function schedule(state: CloudState, now = Date.now()): Promise<Act
     const { rows } = await client.query<Worker>('SELECT * FROM workers WHERE seen_at > $1', [now - limits.leaseMs]);
     const workers = new Map(rows.map(worker => [worker.id, worker]));
     const { rows: [open] } = await client.query<CapacitySession>('SELECT * FROM capacity_sessions WHERE stopped_at IS NULL');
-    const capacity = await reconcile(client, open, state, workers.get(cloudWorker), now);
+    const capacity = await reconcile(client, open, { state, exitedRunningAt }, workers.get(cloudWorker), now);
     const session = capacity.session;
     if (!session || session.stop_requested_at !== null || state !== 'running' || session.ready_at === null) workers.delete(cloudWorker);
     await expireJobs(client, now, new Set(workers.keys()), session);
@@ -253,14 +256,15 @@ export function sessionCost(session: CapacitySession, now: number) {
   return computeCost(session.rate_micros, Math.max(60_000, (session.running_ended_at ?? now) - session.running_at));
 }
 
-export async function controllerTick(observe: () => Promise<CloudState>, act: (action: 'start' | 'stop') => Promise<void>) {
+export async function controllerTick(observe: () => Promise<CloudObservation>, act: (action: 'start' | 'stop') => Promise<void>) {
   const client = await db().connect();
   let lock = false;
   try {
     const { rows } = await client.query('SELECT pg_try_advisory_lock(531, 2) AS locked');
     lock = rows[0].locked;
     if (!lock) return;
-    const action = await schedule(await observe());
+    const { state, exitedRunningAt } = await observe();
+    const action = await schedule(state, Date.now(), exitedRunningAt);
     if (action) await act(action);
   } finally {
     try { if (lock) await client.query('SELECT pg_advisory_unlock(531, 2)'); }

@@ -5,7 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { workerGrants } from '../src/artifacts';
-import { verifyRegistration } from '../src/cloud';
+import { observeInstance, verifyRegistration } from '../src/cloud';
+
+test('EC2 stop observations only use valid transition timestamps', () => {
+  const reason = 'User initiated (2026-11-25 06:54:22 GMT)';
+  const time = Date.parse('2026-11-25T06:54:22Z');
+  assert.deepEqual(observeInstance('stopped', reason), { state: 'stopped', exitedRunningAt: time });
+  assert.deepEqual(observeInstance('stopping', reason), { state: 'stopping', exitedRunningAt: time });
+  assert.deepEqual(observeInstance('running', reason), { state: 'running' });
+  assert.deepEqual(observeInstance('stopped', 'User initiated (2026-02-30 06:54:22 GMT)'), { state: 'stopped' });
+  assert.deepEqual(observeInstance('stopped', ''), { state: 'stopped' });
+});
 
 test('EC2 registration checks the signed document and the exact expected worker', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'qos-iid-'));
