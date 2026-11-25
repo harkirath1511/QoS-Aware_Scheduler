@@ -311,10 +311,12 @@ function JobDetail({ id, onBack }: { id: string; onBack: () => void }) {
   }
   const job = value?.job;
   const decision = job?.decision;
+  const winningWorker = job?.attempts.find(attempt => attempt.id === job.winning_attempt_id)?.worker_id;
+  const worker = job?.assigned_worker ?? winningWorker;
   return <>
     <button className="text-button" onClick={onBack}>Back to jobs</button>
     <div className="page-head"><div><h1>Job <span className="mono">{id.slice(0, 8)}</span></h1>
-      {job && <div className="job-meta"><Status job={job} /> <span className="muted">{job.assigned_worker ?? targetLabel(job.target)}</span></div>}</div>
+      {job && <div className="job-meta"><Status job={job} /> <span className="muted">{worker ?? targetLabel(job.target)}</span></div>}</div>
       {job?.winning_attempt_id && <a className="button" href={`/api/jobs/${id}/result`}>Download result</a>}
     </div>
     {error && <p className="error" role="alert">{error}</p>}
@@ -350,7 +352,7 @@ function JobDetail({ id, onBack }: { id: string; onBack: () => void }) {
             <dt>Deadline outcome</dt><dd data-outcome={deadlineOutcome(job)}>{deadlineOutcome(job)}</dd>
             <dt>Priority</dt><dd>{humanize(job.spec.priority)}</dd>
             <dt>Expected local runtime</dt><dd>{job.spec.expectedSeconds} s</dd>
-            <dt>Worker</dt><dd>{job.assigned_worker ?? 'Unassigned'}</dd>
+            <dt>Worker</dt><dd>{worker ?? 'Unassigned'}</dd>
             <dt>Queued</dt><dd>{date(job.queued_at)}</dd><dt>First claim</dt><dd>{date(job.first_started_at)}</dd>
             <dt>Finished</dt><dd>{date(job.terminal_at)}</dd><dt>EC2 cost attributed to job</dt><dd>{money(job.spent_micros)}</dd></dl>
         </section>
