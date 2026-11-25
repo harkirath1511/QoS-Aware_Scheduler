@@ -12,6 +12,9 @@ docker image inspect "$WORKER_IMAGE" >/dev/null
 
 install -d -o root -g root -m 0755 /run/qos-worker/identity
 install -d -o 1000 -g 1000 -m 0700 /run/qos-worker/contact
+if [ -f /etc/qos-worker/relay.pem ]; then
+  install -m 0444 /etc/qos-worker/relay.pem /run/qos-worker/identity/relay.pem
+fi
 metadata='http://169.254.169.254/latest'
 token=$(curl --fail --silent --show-error --max-time 5 -X PUT "$metadata/api/token" \
   -H 'X-aws-ec2-metadata-token-ttl-seconds: 120')

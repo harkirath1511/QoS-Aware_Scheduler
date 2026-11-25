@@ -27,6 +27,6 @@ ENV NODE_ENV=production
 COPY tsconfig.json ./
 COPY src/domain.ts src/vibration.ts ./src/
 COPY scripts/worker.ts scripts/compute.ts ./scripts/
-COPY aws/*.sh aws/*.service aws/*.timer ./aws/
+COPY aws/prepare-worker.sh aws/worker-watchdog.sh aws/ec2-worker.service aws/qos-watchdog.service aws/qos-watchdog.timer ./aws/
 USER node
 CMD ["node", "--import", "tsx", "scripts/worker.ts"]

@@ -38,8 +38,8 @@ $workerImage = "$repo@$digest"
 
 1. Verify Block Public Access, bucket-owner-enforced ownership, default SSE-S3 and TLS enforcement on the artifact bucket. The API writes immutable inputs and signs short-lived grants for one input and one attempt output. Keep the `inputs/` and `attempts/` prefixes private. Set retention for the lab's evidence before writing artifacts.
 2. Check that the observability stack created the controller and EC2 worker log streams and alarms for worker loss, startup timeout and a delayed stop. Use its log group and namespace on both hosts.
-3. Use the two application roles from the resource stack. The web role has `s3:GetObject` and `s3:PutObject` on the two bucket prefixes. The controller role has regional `ec2:DescribeInstances`, `ec2:StartInstances` and `ec2:StopInstances` on the worker, `logs:PutLogEvents` on the controller stream, and `cloudwatch:PutMetricData` in the project namespace. The instance profile writes to the EC2 stream and can pull from the worker repository. Keep operator credentials and worker tokens local to the project hosts.
-4. Put the lab host and EC2 host on the private team network. On the lab host, proxy the loopback dashboard port over private HTTPS using Tailscale Serve. Apply network access rules for the EC2 host and authorized project users. Set `COOKIE_SECURE=true` when accessing the dashboard through HTTPS. PostgreSQL stays on the Compose network.
+3. Use the two application roles from the resource stack. The web role has `s3:GetObject` and `s3:PutObject` on the two bucket prefixes. The controller role has regional `ec2:DescribeInstances`, `ec2:StartInstances` and `ec2:StopInstances` on the worker, `logs:PutLogEvents` on the controller stream, and `cloudwatch:PutMetricData` in the project namespace. The instance profile can create and write the dedicated EC2 log stream and pull the worker image. Keep operator credentials and worker tokens local to the project hosts.
+4. Connect the worker to the lab API over an existing private network or the [Systems Manager relay](#private-worker-connection-through-systems-manager). For a Tailscale deployment, use Serve and apply network access rules for the EC2 host and authorized project users. Set `COOKIE_SECURE=true` when accessing the dashboard through HTTPS. PostgreSQL stays on the Compose network.
 5. Build and publish the `worker` Dockerfile target to the team's private registry. Pull the image by digest to EC2 and set `WORKER_IMAGE_REF` to that same digest-qualified image reference in the lab's `.env`. The AWS Compose override uses that image for both local slots. Use the same architecture for the comparison and authenticate Docker to the private registry on both hosts. Restrict the EC2 security group to outbound access needed for the private API, S3 and CloudWatch. Require IMDSv2 hop limit 1 so the Docker bridge workers cannot obtain the host's credentials.
 
 ## Lab environment
@@ -48,21 +48,10 @@ Complete the EC2 and S3 settings commented in [the environment example](../.env.
 
 The stack outputs supply `AWS_S3_BUCKET` from `ArtifactBucket`, `EC2_INSTANCE_ID` from `InstanceId`, and `EC2_ACCOUNT_ID` from `Account`. Use `$digest` for `EC2_IMAGE_DIGEST` and `$workerImage` for `WORKER_IMAGE_REF`. Set `CLOUDWATCH_LOG_GROUP=/ucs531/scheduler` when using the default observability stack.
 
-Under the trusted operator identity, take short-lived credentials for the two stack roles. Write them to the project directory without printing the session values. Run the following from the same PowerShell session as the deployment commands.
+Generate short-lived credentials for both application roles. Pass the locally authenticated AWS CLI profile used for provisioning. If that profile uses the account root identity, the template creates a project issuer whose only permission is to assume the two application roles. The helper uses a one-time key for that issuer and revokes the key after issuing both sessions.
 
 ```powershell
-foreach ($role in @(
-  @{ Arn = $resources.WebRoleArn; Name = 'web' },
-  @{ Arn = $resources.ControllerRoleArn; Name = 'controller' }
-)) {
-  $session = aws sts assume-role --role-arn $role.Arn --role-session-name "qos-$($role.Name)" --query Credentials --output json | ConvertFrom-Json
-  if ($LASTEXITCODE -ne 0 -or !$session.SessionToken) { throw "Could not assume $($role.Name) role" }
-  @(
-    "AWS_ACCESS_KEY_ID=$($session.AccessKeyId)"
-    "AWS_SECRET_ACCESS_KEY=$($session.SecretAccessKey)"
-    "AWS_SESSION_TOKEN=$($session.SessionToken)"
-  ) | Set-Content -LiteralPath ".env.aws-$($role.Name)" -Encoding utf8
-}
+./aws/new-role-sessions.ps1 -Profile ucs531-qos -Region $region -StackName "$stack-resources" -Destination .
 ```
 
 Set `AWS_WEB_ENV_FILE=.env.aws-web` and `AWS_CONTROLLER_ENV_FILE=.env.aws-controller` in `.env`. Ensure the sessions cover the planned evaluation. When refreshing credentials, recreate the web and scheduler containers after all jobs finish and EC2 stops. Once the worker is configured and stopped, start the lab stack.
@@ -121,6 +110,21 @@ sudo systemctl poweroff
 ```
 
 The boot hook reads the signed instance identity with IMDSv2 on the host. The trusted worker agent presents it over private HTTPS. The web API verifies the signature against the AWS certificate and checks the configured account, region, instance ID and image digest. The host watchdog stops the VM when controller contact has expired after the startup grace period.
+
+## Private worker connection through Systems Manager
+
+Install OpenSSH and the [AWS Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/install-plugin-windows.html) on the lab host. Use an operator profile that can connect to the dedicated instance through Systems Manager. The relay uses an SSH reverse port forward over the AWS-managed connection. The instance security group needs no inbound port for this arrangement.
+
+1. Generate separate SSH keys for the relay and one-time host setup. Run `aws/prepare-ssm-relay.sh` as root on the dedicated instance via Systems Manager Run Command. Pass the two public keys as arguments, in that order. The script prepares a forwarding-only user named `qos-tunnel` and reports the Docker bridge gateway and SSH host key.
+2. Pin that SSH host key in a project-specific known_hosts file under the instance ID returned by the stack. Configure the OpenSSH host alias `qos-ec2` to connect as `qos-tunnel` via the Session Manager `AWS-StartSSHSession` document. Use the relay private key, strict host-key checking, and `RemoteForward <bridge-gateway>:38443 127.0.0.1:38444`. Require `ExitOnForwardFailure yes` and set `ServerAliveInterval 5` and `ServerAliveCountMax 2`. Use a separate OpenSSH entry for temporary `ec2-user` setup and revoke its key once that setup is complete.
+3. Create a project TLS certificate with a DNS subject alternative name of `qos-lab-worker`. Copy its public certificate to `/etc/qos-worker/relay.pem` over the verified private setup connection. Set `WORKER_API_URL=https://qos-lab-worker:38443` and `NODE_EXTRA_CA_CERTS=/run/qos-worker/identity/relay.pem` in `worker.env`. Only the lab keeps the TLS private key. The worker uses the standard bridged Docker network and the host gateway alias.
+4. Keep the relay running during evaluation. It listens on loopback, forwards only worker API POST requests, and reconnects the SSH session when EC2 starts. Replace `3000` if the lab API uses a different loopback port.
+
+```sh
+npx tsx scripts/worker-relay.ts relay.pem relay-key.pem ssh-config 3000
+```
+
+Invoke the AWS CLI executable directly in `ProxyCommand` where possible so SSH data travels as bytes. See [SSH over Systems Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-getting-started-enable-ssh-connections.html) for platform-specific syntax.
 
 ## Demonstrate live bursting
 
