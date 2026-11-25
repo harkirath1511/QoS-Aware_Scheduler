@@ -2,6 +2,7 @@
 .env.local
 .env.aws-*
 .deps/
+.hallmark/
 .data/
 .next/
 node_modules/

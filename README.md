@@ -2,6 +2,8 @@
 
 UCS531 Cloud Computing project. Submit a vibration recording, follow its placement decision, and download the computed frequency and lag scores. A PostgreSQL queue feeds two single-slot local workers. The QoS policy starts or reuses one EC2 worker when it can rescue a deadline within the job and run budgets.
 
+See the [AWS-hosted deployment](aws/HOSTED.md) for sign-in, the optional laptop workers, and AWS infrastructure.
+
 ## Run the local demo
 
 Use Node.js 22 or newer and Docker Compose.
@@ -69,7 +71,7 @@ Use `Authorization: Bearer <project-token>` for scripts. The dashboard uses an H
 | `GET /api/jobs` | List owned jobs with optional `state`, `priority`, `target`, and `offset` filters. |
 | `GET /api/jobs/{id}` | View job state, forecast, and attempts. |
 | `GET /api/jobs/{id}/events` | Read the job timeline. |
-| `GET /api/jobs/{id}/result` | Download the verified result. In AWS mode, follow the signed S3 redirect. |
+| `GET /api/jobs/{id}/result` | Download the verified result. By default AWS mode returns a signed S3 redirect. Add `?download=1` to serve the attachment through the authenticated API. |
 | `GET /api/runs/operations` | Inspect queue, workers, and EC2 lifecycle. |
 | `GET /api/runs/{id}/metrics` | Get the aggregate metrics and EC2 sessions for a run. |
 
