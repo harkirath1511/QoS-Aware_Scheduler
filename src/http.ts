@@ -126,8 +126,10 @@ async function jobRequest(request: Request, parts: string[], owner: string) {
   }
   if (parts.length === 2 && parts[1] === 'result' && request.method === 'GET') {
     if (!job.winning_attempt_id) throw new Fault(409, 'A result has not been published.');
-    const remote = await downloadUrl(id, job.winning_attempt_id);
-    if (remote) return new Response(null, { status: 303, headers: { ...noStore, Location: remote } });
+    if (new URL(request.url).searchParams.get('download') !== '1') {
+      const remote = await downloadUrl(id, job.winning_attempt_id);
+      if (remote) return new Response(null, { status: 303, headers: { ...noStore, Location: remote } });
+    }
     const bytes = await readArtifact(outputKey(id, job.winning_attempt_id), maxResultBytes);
     return new Response(new Uint8Array(bytes), {
       headers: { ...noStore, 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="${id}.json"` },

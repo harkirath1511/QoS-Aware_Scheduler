@@ -92,6 +92,10 @@ class HostedApi {
     const checksum = sha256(bytes);
     assert.equal(checksum, winning.output_sha256);
     assert.equal(JSON.parse(bytes.toString('utf8')).frequencyHz, 250);
+    const browserDownload = await this.request(`/api/jobs/${jobId}/result?download=1`);
+    assert.equal(browserDownload.status, 200);
+    assert.equal(browserDownload.headers.get('content-disposition'), `attachment; filename="${jobId}.json"`);
+    assert.equal(sha256(Buffer.from(await browserDownload.arrayBuffer())), checksum);
     return { job, winning, checksum, publishedBeforeDeadline: job.terminal_at! <= Date.parse(job.spec.deadline) };
   }
 

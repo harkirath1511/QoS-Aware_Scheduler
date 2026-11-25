@@ -317,7 +317,7 @@ function JobDetail({ id, onBack }: { id: string; onBack: () => void }) {
     <button className="text-button" onClick={onBack}>Back to jobs</button>
     <div className="page-head"><div><h1>Job <span className="mono">{id.slice(0, 8)}</span></h1>
       {job && <div className="job-meta"><Status job={job} /> <span className="muted">{worker ?? targetLabel(job.target)}</span></div>}</div>
-      {job?.winning_attempt_id && <a className="button" href={`/api/jobs/${id}/result`}>Download result</a>}
+      {job?.winning_attempt_id && <a className="button" href={`/api/jobs/${id}/result?download=1`} download={`${id}.json`}>Download result</a>}
     </div>
     {error && <p className="error" role="alert">{error}</p>}
     {!job ? <p>{error ? 'Job details unavailable.' : 'Loading job…'}</p> : <>
