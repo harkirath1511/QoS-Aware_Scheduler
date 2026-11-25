@@ -3,6 +3,7 @@
 UCS531 Cloud Computing project. Submit a vibration recording, follow its placement decision, and download the computed frequency and lag scores. A PostgreSQL queue feeds two single-slot local workers. The QoS policy starts or reuses one EC2 worker when it can rescue a deadline within the job and run budgets.
 
 See the [AWS-hosted deployment](aws/HOSTED.md) for sign-in, the optional laptop workers, and AWS infrastructure.
+See the [UCS531 submission index](docs/submission/README.md) for the proposal, architecture, evaluation and live demo.
 
 ## Run the local demo
 
