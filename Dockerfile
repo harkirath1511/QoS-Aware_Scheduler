@@ -22,6 +22,9 @@ USER node
 EXPOSE 3000
 CMD ["node", "node_modules/next/dist/bin/next", "start"]
 
+FROM lab AS hosted
+COPY aws/certs/ ./certs/
+
 FROM dependencies AS worker
 ENV NODE_ENV=production
 COPY tsconfig.json ./

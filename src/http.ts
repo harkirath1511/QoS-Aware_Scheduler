@@ -25,6 +25,10 @@ async function readJson<T>(request: Request, schema: z.ZodType<T>, size = 32_768
 
 export async function handle(request: Request, parts: string[]) {
   try {
+    if (parts.length === 1 && parts[0] === 'health' && request.method === 'GET') {
+      await db().query('SELECT 1 FROM jobs LIMIT 1');
+      return json({ status: 'ok' });
+    }
     if (parts[0] === 'worker') return await workerRequest(request, parts.slice(1));
     if (parts.length === 1 && parts[0] === 'session') {
       sameOrigin(request);

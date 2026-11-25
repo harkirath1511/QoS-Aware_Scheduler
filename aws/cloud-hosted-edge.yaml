@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: HTTPS entry point to the private UCS531 EC2 origin
+Parameters:
+  AppInstanceId:
+    Type: String
+    AllowedPattern: 'i-[a-f0-9]+'
+  AppPrivateDnsName:
+    Type: String
+    AllowedPattern: '[a-z0-9.-]+'
+Resources:
+  PrivateOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Arn: !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${AppInstanceId}'
+        Name: !Sub '${AWS::StackName}-origin'
+        HTTPPort: 3000
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+  Dashboard:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: UCS531 Cloud QoS Scheduler dashboard and worker API
+        Enabled: true
+        IPV6Enabled: true
+        HttpVersion: http2and3
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: SchedulerApp
+            DomainName: !Ref AppPrivateDnsName
+            VpcOriginConfig:
+              VpcOriginId: !GetAtt PrivateOrigin.Id
+        DefaultCacheBehavior:
+          TargetOriginId: SchedulerApp
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed CachingDisabled
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3 # Managed AllViewer
+          Compress: true
+        CustomErrorResponses:
+          - {ErrorCode: 403, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 404, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 500, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 502, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 503, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 504, ErrorCachingMinTTL: 0}
+        PriceClass: PriceClass_100
+      Tags: [{Key: Project, Value: UCS531}]
+Outputs:
+  DashboardUrl:
+    Value: !Sub 'https://${Dashboard.DomainName}'
+  DistributionId:
+    Value: !Ref Dashboard
+  OriginId:
+    Value: !GetAtt PrivateOrigin.Id

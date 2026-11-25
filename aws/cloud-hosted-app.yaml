@@ -1,0 +1,280 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dedicated private EC2 application host for the UCS531 scheduler
+Parameters:
+  AppSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  AppImageDigest:
+    Type: String
+    AllowedPattern: 'sha256:[a-f0-9]{64}'
+  ImageRepositoryName:
+    Type: String
+    AllowedPattern: '[a-z0-9][a-z0-9/_-]+'
+  DatabaseEndpoint:
+    Type: String
+    AllowedPattern: '[a-z0-9.-]+'
+  DatabaseSecretArn:
+    Type: String
+  RuntimeSeedArn:
+    Type: String
+  BurstWorkerTokenArn:
+    Type: String
+  ArtifactBucket:
+    Type: String
+    AllowedPattern: '[a-z0-9.-]+'
+  BurstInstanceId:
+    Type: AWS::EC2::Instance::Id
+  WorkerImageDigest:
+    Type: String
+    AllowedPattern: 'sha256:[a-f0-9]{64}'
+  LogGroupName:
+    Type: String
+    Default: /ucs531/scheduler
+  RateUsdPerHour:
+    Type: String
+    AllowedPattern: '[0-9]+(\.[0-9]{1,6})?'
+  RateDate:
+    Type: String
+    AllowedPattern: '[0-9]{4}-[0-9]{2}-[0-9]{2}'
+  Ec2StartSeconds:
+    Type: Number
+    Default: 40
+  AppAmi:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+Resources:
+  ImageDigestParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub '/${AWS::StackName}/app-image-digest'
+      Value: !Ref AppImageDigest
+  WebLog:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      LogStreamName: app-web
+  SchedulerLog:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      LogStreamName: app-scheduler
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Policies:
+        - PolicyName: ProjectRuntime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: [!Ref RuntimeSeedArn, !Ref BurstWorkerTokenArn, !Ref DatabaseSecretArn]
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ImageDigestParameter}'
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ImageRepositoryName}'
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${ArtifactBucket}/inputs/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${ArtifactBucket}/attempts/*'
+              - Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: '*'
+                Condition:
+                  StringEquals: {'aws:RequestedRegion': !Ref 'AWS::Region'}
+              - Effect: Allow
+                Action: [ec2:StartInstances, ec2:StopInstances]
+                Resource: !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${BurstInstanceId}'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupName}:log-stream:app-web'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupName}:log-stream:app-scheduler'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupName}:log-stream:controller'
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals: {'cloudwatch:namespace': UCS531/Scheduler}
+  AppProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref AppRole]
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        CreditSpecification: {CpuCredits: standard}
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required
+          HttpPutResponseHopLimit: 1
+  App:
+    Type: AWS::EC2::Instance
+    DependsOn: [WebLog, SchedulerLog]
+    Properties:
+      ImageId: !Ref AppAmi
+      InstanceType: t3.small
+      IamInstanceProfile: !Ref AppProfile
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref AppSubnetId
+          AssociatePublicIpAddress: false
+          Ipv6AddressCount: 1
+          DeleteOnTermination: true
+          GroupSet: [!Ref AppSecurityGroupId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 12, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+      Tags:
+        - {Key: Name, Value: !Sub '${AWS::StackName}-origin'}
+        - {Key: Project, Value: UCS531}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 /etc/qos-hosted
+          command -v aws >/dev/null || dnf -y install awscli-2
+          command -v docker >/dev/null || dnf -y install docker
+          command -v jq >/dev/null || dnf -y install jq
+          cat > /etc/amazon/ssm/amazon-ssm-agent.json <<'SSM'
+          {"Agent":{"Region":"${AWS::Region}","UseDualStackEndpoint":true}}
+          SSM
+          systemctl enable --now docker
+          systemctl restart amazon-ssm-agent
+          cat > /etc/qos-hosted/host.env <<'ENV'
+          AWS_REGION=${AWS::Region}
+          AWS_USE_DUALSTACK_ENDPOINT=true
+          AWS_DEFAULT_REGION=${AWS::Region}
+          AWS_PAGER=
+          APP_DIGEST_PARAMETER=${ImageDigestParameter}
+          ECR_REGISTRY=${AWS::AccountId}.dkr-ecr.${AWS::Region}.on.aws
+          ECR_REPOSITORY=${ImageRepositoryName}
+          SEED_ARN=${RuntimeSeedArn}
+          BURST_TOKEN_ARN=${BurstWorkerTokenArn}
+          DB_MASTER_ARN=${DatabaseSecretArn}
+          CLOUDWATCH_LOG_GROUP=${LogGroupName}
+          ENV
+          cat > /etc/qos-hosted/app.env <<'ENV'
+          AWS_REGION=${AWS::Region}
+          AWS_USE_DUALSTACK_ENDPOINT=true
+          AWS_S3_BUCKET=${ArtifactBucket}
+          RDS_HOST=${DatabaseEndpoint}
+          EC2_INSTANCE_ID=${BurstInstanceId}
+          EC2_ACCOUNT_ID=${AWS::AccountId}
+          EC2_IDENTITY_CERT=/app/certs/ec2-iid.pem
+          EC2_IMAGE_DIGEST=${WorkerImageDigest}
+          EC2_RATE_USD_HOUR=${RateUsdPerHour}
+          EC2_RATE_SOURCE=https://aws.amazon.com/ec2/pricing/on-demand/
+          EC2_RATE_DATE=${RateDate}
+          EC2_START_ESTIMATE_S=${Ec2StartSeconds}
+          CLOUD_RUNTIME_RATIO=0.10
+          CLOUDWATCH_LOG_GROUP=${LogGroupName}
+          CLOUDWATCH_NAMESPACE=UCS531/Scheduler
+          COOKIE_SECURE=true
+          HOSTNAME=0.0.0.0
+          ENV
+          cat > /usr/local/sbin/qos-hosted-prepare <<'PREPARE'
+          #!/bin/bash
+          set -euo pipefail
+          umask 077
+          set -a
+          . /etc/qos-hosted/host.env
+          set +a
+          install -d -m 0700 /run/qos-hosted
+          scratch=$(mktemp -d /run/qos-hosted/setup.XXXXXX)
+          trap 'rm -f "$scratch/seed" "$scratch/burst" "$scratch/master" "$scratch/runtime.env"; rmdir "$scratch"' EXIT
+          digest=$(aws ssm get-parameter --name "$APP_DIGEST_PARAMETER" --query Parameter.Value --output text)
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          image="$ECR_REGISTRY/$ECR_REPOSITORY@$digest"
+          if ! docker image inspect "$image" >/dev/null 2>&1; then
+            aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null
+            docker pull "$image"
+            docker logout "$ECR_REGISTRY" >/dev/null
+          fi
+          aws secretsmanager get-secret-value --secret-id "$SEED_ARN" --query SecretString --output text > "$scratch/seed"
+          aws secretsmanager get-secret-value --secret-id "$BURST_TOKEN_ARN" --query SecretString --output text > "$scratch/burst"
+          aws secretsmanager get-secret-value --secret-id "$DB_MASTER_ARN" --query SecretString --output text > "$scratch/master"
+          jq -nc --rawfile seed "$scratch/seed" --rawfile burstToken "$scratch/burst" '{seed:$seed,burstToken:$burstToken}' |
+            docker run --rm -i --network host --env-file /etc/qos-hosted/app.env "$image" \
+              node --import tsx scripts/hosted-secrets.ts runtime > "$scratch/runtime.env"
+          docker run --rm -i --network host --env-file "$scratch/runtime.env" "$image" \
+            node --import tsx scripts/hosted-secrets.ts init-db < "$scratch/master"
+          docker run --rm --network host --env-file "$scratch/runtime.env" "$image" npm run db:init
+          install -m 0600 "$scratch/runtime.env" /run/qos-hosted/runtime.env
+          printf '%s\n' "$image" > /run/qos-hosted/image
+          PREPARE
+          cat > /usr/local/sbin/qos-hosted-run <<'RUN'
+          #!/bin/bash
+          set -euo pipefail
+          . /etc/qos-hosted/host.env
+          role=$1
+          if [ "$role" = web ]; then
+            set -- node node_modules/next/dist/bin/next start --hostname 0.0.0.0
+          else
+            set -- node --import tsx scripts/scheduler.ts
+          fi
+          exec docker run --rm --name "qos-hosted-$role" --init --network host --cap-drop ALL \
+            --security-opt no-new-privileges --env-file /etc/qos-hosted/app.env \
+            --env-file /run/qos-hosted/runtime.env --log-driver awslogs \
+            --log-opt awslogs-region="$AWS_REGION" --log-opt awslogs-endpoint="https://logs.$AWS_REGION.api.aws" \
+            --log-opt awslogs-group="$CLOUDWATCH_LOG_GROUP" --log-opt awslogs-stream="app-$role" \
+            "$(cat /run/qos-hosted/image)" "$@"
+          RUN
+          chmod 0700 /usr/local/sbin/qos-hosted-prepare /usr/local/sbin/qos-hosted-run
+          cat > /etc/systemd/system/qos-hosted-prepare.service <<'UNIT'
+          [Unit]
+          Description=Prepare the private scheduler database and application image
+          Wants=network-online.target
+          Requires=docker.service
+          After=network-online.target docker.service
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/local/sbin/qos-hosted-prepare
+          UNIT
+          cat > /etc/systemd/system/qos-hosted@.service <<'UNIT'
+          [Unit]
+          Description=Hosted scheduler %i
+          Requires=docker.service qos-hosted-prepare.service
+          After=docker.service qos-hosted-prepare.service
+          StartLimitIntervalSec=0
+          [Service]
+          ExecStartPre=-/usr/bin/docker rm -f qos-hosted-%i
+          ExecStart=/usr/local/sbin/qos-hosted-run %i
+          ExecStop=/usr/bin/docker stop --time 10 qos-hosted-%i
+          Restart=always
+          RestartSec=5s
+          TimeoutStopSec=20s
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          systemctl daemon-reload
+          systemctl enable --now qos-hosted@web.service qos-hosted@scheduler.service
+Outputs:
+  AppInstanceId:
+    Value: !Ref App
+  AppPrivateDnsName:
+    Value: !GetAtt App.PrivateDnsName
+  AppImageParameter:
+    Value: !Ref ImageDigestParameter
