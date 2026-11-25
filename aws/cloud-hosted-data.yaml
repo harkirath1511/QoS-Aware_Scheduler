@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private network, PostgreSQL and runtime secrets for the hosted UCS531 scheduler
+Parameters:
+  S3PrefixList:
+    Type: String
+    AllowedPattern: 'pl-[a-f0-9]+'
+  CloudFrontPrefixList:
+    Type: String
+    AllowedPattern: 'pl-[a-f0-9]+'
+  CloudFrontOriginGroup:
+    Description: CloudFront VPC Origins service-managed group, once the origin is deployed
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|sg-[a-f0-9]+'
+  PostgresVersion:
+    Type: String
+    Default: '17.11'
+Conditions:
+  HasOriginGroup: !Not [!Equals [!Ref CloudFrontOriginGroup, '']]
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.53.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: !Ref 'AWS::StackName'}, {Key: Project, Value: UCS531}]
+  Ipv6:
+    Type: AWS::EC2::VPCCidrBlock
+    Properties:
+      VpcId: !Ref Vpc
+      AmazonProvidedIpv6CidrBlock: true
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  InternetAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  Ipv6Egress:
+    Type: AWS::EC2::EgressOnlyInternetGateway
+    Properties:
+      VpcId: !Ref Vpc
+  AppSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: Ipv6
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.53.1.0/24
+      Ipv6CidrBlock: !Select [0, !Cidr [!Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 1, 64]]
+      AssignIpv6AddressOnCreation: true
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: ucs531-private-app}]
+  DatabaseSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !GetAtt AppSubnet.AvailabilityZone
+      CidrBlock: 10.53.10.0/24
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: ucs531-private-db-a}]
+  DatabaseSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.53.11.0/24
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: ucs531-private-db-b}]
+  AppRoutes:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  AppRouteLink:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppSubnet
+      RouteTableId: !Ref AppRoutes
+  AppIpv6Route:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AppRoutes
+      DestinationIpv6CidrBlock: '::/0'
+      EgressOnlyInternetGatewayId: !Ref Ipv6Egress
+  S3Gateway:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds: [!Ref AppRoutes]
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Vpc
+      GroupDescription: Private CloudFront origin and TLS to AWS services
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIpv6: '::/0'}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, DestinationPrefixListId: !Ref S3PrefixList}
+  CloudFrontIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3000
+      ToPort: 3000
+      SourcePrefixListId: !If [HasOriginGroup, !Ref 'AWS::NoValue', !Ref CloudFrontPrefixList]
+      SourceSecurityGroupId: !If [HasOriginGroup, !Ref CloudFrontOriginGroup, !Ref 'AWS::NoValue']
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Vpc
+      GroupDescription: PostgreSQL connections from the scheduler app host only
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 5432, ToPort: 5432, SourceSecurityGroupId: !Ref AppSecurityGroup}
+  AppToDatabase:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
+  DatabasePlacement:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Isolated UCS531 scheduler DB subnets
+      SubnetIds: [!Ref DatabaseSubnetA, !Ref DatabaseSubnetB]
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: postgres
+      EngineVersion: !Ref PostgresVersion
+      DBInstanceClass: db.t4g.micro
+      DBName: scheduler
+      MasterUsername: scheduler_admin
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DatabasePlacement
+      AvailabilityZone: !GetAtt DatabaseSubnetA.AvailabilityZone
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      StorageType: gp3
+      AllocatedStorage: '20'
+      BackupRetentionPeriod: 1
+      MultiAZ: false
+      CopyTagsToSnapshot: true
+      Tags: [{Key: Project, Value: UCS531}]
+  RuntimeSeed:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}/runtime-seed'
+      Description: Seed for the dashboard session key and per-account and local worker tokens
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+  BurstWorkerToken:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}/burst-worker-token'
+      Description: Registration and lease token dedicated to the burst worker
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  AppSubnetId:
+    Value: !Ref AppSubnet
+  AppSecurityGroupId:
+    Value: !Ref AppSecurityGroup
+  DatabaseIdentifier:
+    Value: !Ref Database
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  DatabaseSecretArn:
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+  RuntimeSeedArn:
+    Value: !Ref RuntimeSeed
+  BurstWorkerTokenArn:
+    Value: !Ref BurstWorkerToken
