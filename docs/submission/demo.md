@@ -35,7 +35,14 @@ try {
 }
 ```
 
-In the dashboard, select the **Hosted burst acceptance** run. Show both finish forecasts, the EC2 assignment, the checksum on the completed attempt, the matching CloudWatch record, and the return to stopped after idle time. The recorded hosted rescue completed 64.5 seconds before its deadline. [Verified burst job](https://4k3efjo42g.execute-api.us-east-1.amazonaws.com/?job=8191eab0-45bd-4450-bfa4-680d06d8ce1c)
+Open the EC2 job using its ID from the verifier output file.
+
+```powershell
+$proof = Get-Content evaluation-output/hosted/connected.json -Raw | ConvertFrom-Json
+"$env:HOSTED_VERIFY_URL/?job=$($proof.cloud.job.id)"
+```
+
+Show both finish forecasts, the EC2 assignment, the checksum on the completed attempt, the matching CloudWatch record, and the return to stopped after idle time. **Operations** also lists the **Hosted burst acceptance** run and links to its metrics. The recorded hosted rescue completed 64.5 seconds before its deadline. [Verified burst job](https://4k3efjo42g.execute-api.us-east-1.amazonaws.com/?job=8191eab0-45bd-4450-bfa4-680d06d8ce1c)
 
 ## 3 Cloud execution with the laptop workers offline
 
