@@ -14,7 +14,7 @@ Parameters:
     Description: Use true for a subnet routed to an internet gateway or false for a subnet with NAT
   OperatorPrincipalArn:
     Type: String
-    Description: Existing IAM operator role ARN authorized to assume the two lab roles
+    Description: Existing AWS operator principal authorized to assume the two lab roles
   WorkerAmi:
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
@@ -32,6 +32,7 @@ Parameters:
     Description: Match the Namespace parameter of the observability stack
 Conditions:
   UsePublicIpv4: !Equals [!Ref AssignPublicIpv4, 'true']
+  RootOperator: !Equals [!Ref OperatorPrincipalArn, !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root']
 Resources:
   Artifacts:
     Type: AWS::S3::Bucket
@@ -156,6 +157,21 @@ Resources:
           set -eu
           dnf install -y docker
           systemctl enable --now docker
+  CredentialsIssuer:
+    Type: AWS::IAM::User
+    Condition: RootOperator
+  IssuerPolicy:
+    Type: AWS::IAM::Policy
+    Condition: RootOperator
+    Properties:
+      PolicyName: IssueProjectSessions
+      Users: [!Ref CredentialsIssuer]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Resource: [!GetAtt WebRole.Arn, !GetAtt ControllerRole.Arn]
   WebRole:
     Type: AWS::IAM::Role
     Properties:
@@ -164,8 +180,11 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !Ref OperatorPrincipalArn
+              AWS: !If [RootOperator, !GetAtt CredentialsIssuer.Arn, !Ref OperatorPrincipalArn]
             Action: sts:AssumeRole
+            Condition:
+              ArnEquals:
+                'aws:PrincipalArn': !If [RootOperator, !GetAtt CredentialsIssuer.Arn, !Ref OperatorPrincipalArn]
       Policies:
         - PolicyName: ArtifactAccess
           PolicyDocument:
@@ -184,8 +203,11 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !Ref OperatorPrincipalArn
+              AWS: !If [RootOperator, !GetAtt CredentialsIssuer.Arn, !Ref OperatorPrincipalArn]
             Action: sts:AssumeRole
+            Condition:
+              ArnEquals:
+                'aws:PrincipalArn': !If [RootOperator, !GetAtt CredentialsIssuer.Arn, !Ref OperatorPrincipalArn]
       Policies:
         - PolicyName: SchedulerCapacity
           PolicyDocument:
@@ -220,5 +242,8 @@ Outputs:
     Value: !GetAtt WebRole.Arn
   ControllerRoleArn:
     Value: !GetAtt ControllerRole.Arn
+  CredentialsIssuer:
+    Condition: RootOperator
+    Value: !Ref CredentialsIssuer
   Account:
     Value: !Ref AWS::AccountId
