@@ -6,9 +6,7 @@ This is the UCS531 Cloud Computing scheduler. You submit a vibration recording, 
 
 A placement is a recorded decision, with both predicted finishes, a reason, and the budget comparison. Money is stored as integer microdollars. A lost or timed-out attempt may retry once. A missed deadline is stored as an outcome, and a successful result stays downloadable.
 
-**Local dashboard:** [http://localhost:3000](http://localhost:3000)
 **Hosted dashboard:** [4k3efjo42g.execute-api.us-east-1.amazonaws.com](https://4k3efjo42g.execute-api.us-east-1.amazonaws.com)
-**Generated docs:** [DeepWiki / harkirath1511/QoS-Aware_Scheduler](https://deepwiki.com/harkirath1511/QoS-Aware_Scheduler)
 **AWS runbook:** [aws/HOSTED.md](aws/HOSTED.md)
 **Submission index:** [docs/submission/README.md](docs/submission/README.md)
 
